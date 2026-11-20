@@ -1,0 +1,39 @@
+# ===== Swift Package Manager =====
+.build/
+.swiftpm/
+Package.resolved
+
+# ===== 构建产物 =====
+dist/
+build/
+DerivedData/
+*.dSYM/
+
+# ===== Xcode（若生成）=====
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.hmap
+
+# ===== macOS 系统文件 =====
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# ===== IDE / 工具本地文件 =====
+.trae/
+.trae-html-share-packages/
+.vscode/
+.idea/
+
+# ===== 临时截图 / 缓存 =====
+.screenshots/
+
+# ===== 日志 =====
+*.log

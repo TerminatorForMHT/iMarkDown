@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN" data-appearance="light" data-preview="github">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>iMarkDown Editor</title>
+  <script>
+    // 首帧消除闪烁：WebKit 会给出系统外观，原生配置随后覆盖。
+    (function () {
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.dataset.appearance = 'dark';
+      }
+    })();
+  </script>
+
+  <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
+  <link rel="stylesheet" href="vendor/codemirror/addon/simplescrollbars.min.css">
+  <link rel="stylesheet" href="vendor/github-markdown/github-markdown.css">
+  <link rel="stylesheet" href="vendor/highlight/github.min.css" id="hljs-light">
+  <link rel="stylesheet" href="vendor/highlight/github-dark.min.css" id="hljs-dark" disabled>
+  <link rel="stylesheet" href="css/preview.css">
+  <link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+  <div id="workspace" class="mode-split">
+    <section class="pane pane-source">
+      <header class="pane-header">
+        <span class="pane-label">MARKDOWN</span>
+        <span class="pane-hint">⌘B 加粗 · ⌘S 保存</span>
+      </header>
+      <div class="editor-host">
+        <textarea id="source" aria-label="Markdown 源码"></textarea>
+        <div id="source-placeholder" aria-hidden="true">开始书写 Markdown…</div>
+      </div>
+    </section>
+
+    <div class="split-divider" aria-hidden="true"></div>
+
+    <section class="pane pane-preview">
+      <header class="pane-header">
+        <span class="pane-label">预览</span>
+        <span class="pane-hint" id="preview-hint">实时渲染</span>
+      </header>
+      <div class="preview-scroll" id="preview-scroll">
+        <article id="preview" class="markdown-body"></article>
+      </div>
+    </section>
+  </div>
+
+  <script src="vendor/codemirror/codemirror.min.js"></script>
+  <script src="vendor/codemirror/mode/xml.min.js"></script>
+  <script src="vendor/codemirror/mode/javascript.min.js"></script>
+  <script src="vendor/codemirror/mode/css.min.js"></script>
+  <script src="vendor/codemirror/mode/yaml.min.js"></script>
+  <script src="vendor/codemirror/mode/clike.min.js"></script>
+  <script src="vendor/codemirror/mode/markdown.min.js"></script>
+  <script src="vendor/codemirror/addon/closebrackets.min.js"></script>
+  <script src="vendor/codemirror/addon/matchbrackets.min.js"></script>
+  <script src="vendor/codemirror/addon/active-line.min.js"></script>
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/highlight/highlight.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+/* 导出专用：让同一份文章脱离应用后依然有合适的版心与分页行为。 */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+}
+
+html[data-appearance="dark"],
+html[data-appearance="dark"] body {
+  background: #0d1117;
+}
+
+body {
+  padding: 0;
+}
+
+.markdown-body {
+  max-width: 780px;
+  padding: 56px 48px 72px;
+}
+
+@media print {
+  html,
+  body,
+  html[data-appearance="dark"] body {
+    background: #ffffff !important;
+  }
+
+  html[data-appearance="dark"] .markdown-body {
+    color: #1f2328 !important;
+  }
+
+  .markdown-body {
+    max-width: none;
+    padding: 0;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  pre,
+  blockquote,
+  table,
+  img,
+  figure {
+    break-inside: avoid;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    break-after: avoid;
+  }
+
+  pre {
+    white-space: pre-wrap;
+  }
+}

@@ -1,0 +1,311 @@
+:root {
+  --editor-font-size: 14px;
+  --preview-font-size: 15.5px;
+
+  --fg: #1c1c1e;
+  --fg-muted: #6e6e73;
+  --fg-faint: #9a9aa0;
+
+  --surface-top: #ffffff;
+  --surface-bottom: #f5f6f9;
+  --pane-tint: rgba(246, 247, 250, 0.55);
+  --pane-divider: rgba(15, 23, 42, 0.075);
+  --hairline: rgba(15, 23, 42, 0.06);
+
+  --accent: #0a7cff;
+  --selection: rgba(10, 124, 255, 0.16);
+  --active-line: rgba(10, 124, 255, 0.035);
+
+  --cm-heading: #0b3d91;
+  --cm-emphasis: #b0355b;
+  --cm-link: #0a7cff;
+  --cm-code: #8a3ffc;
+  --cm-quote: #5b7f74;
+  --cm-comment: #8e8e93;
+}
+
+html[data-appearance="dark"] {
+  --fg: #f2f2f7;
+  --fg-muted: #a1a1aa;
+  --fg-faint: #76767e;
+
+  --surface-top: #1b1b1e;
+  --surface-bottom: #141416;
+  --pane-tint: rgba(24, 24, 27, 0.45);
+  --pane-divider: rgba(255, 255, 255, 0.075);
+  --hairline: rgba(255, 255, 255, 0.06);
+
+  --accent: #4da3ff;
+  --selection: rgba(77, 163, 255, 0.22);
+  --active-line: rgba(77, 163, 255, 0.05);
+
+  --cm-heading: #9cc7ff;
+  --cm-emphasis: #ff9fb8;
+  --cm-link: #6cb6ff;
+  --cm-code: #c9a2ff;
+  --cm-quote: #9fd3c3;
+  --cm-comment: #7f7f87;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(255, 255, 255, 0.55), transparent 58%),
+    linear-gradient(165deg, var(--surface-top) 0%, var(--surface-bottom) 100%);
+}
+
+html[data-appearance="dark"] body {
+  background:
+    radial-gradient(120% 90% at 10% 0%, rgba(255, 255, 255, 0.045), transparent 55%),
+    linear-gradient(165deg, var(--surface-top) 0%, var(--surface-bottom) 100%);
+}
+
+#workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+#workspace.mode-source {
+  grid-template-columns: minmax(0, 1fr) 0 0;
+}
+
+#workspace.mode-preview {
+  grid-template-columns: 0 0 minmax(0, 1fr);
+}
+
+.mode-source .pane-preview,
+.mode-source .split-divider,
+.mode-preview .pane-source,
+.mode-preview .split-divider {
+  display: none;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-source {
+  background: var(--pane-tint);
+}
+
+.pane-preview {
+  background: transparent;
+}
+
+.split-divider {
+  background: var(--pane-divider);
+  width: 1px;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 33px;
+  flex: 0 0 33px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--hairline);
+  user-select: none;
+}
+
+.pane-label {
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.13em;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+}
+
+.pane-hint {
+  font-size: 10px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#source-placeholder {
+  position: absolute;
+  top: 22px;
+  left: 25px;
+  pointer-events: none;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: var(--editor-font-size);
+  color: var(--fg-faint);
+  transition: opacity 0.18s ease;
+  opacity: 1;
+}
+
+/* CodeMirror */
+.CodeMirror {
+  height: 100%;
+  background: transparent;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "PingFang SC", monospace;
+  font-size: var(--editor-font-size);
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+.CodeMirror-lines {
+  padding: 18px 20px 140px;
+}
+
+.CodeMirror pre.CodeMirror-line,
+.CodeMirror pre.CodeMirror-line-like {
+  padding: 0 4px;
+}
+
+.CodeMirror-gutters {
+  display: none;
+}
+
+.CodeMirror-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.CodeMirror-selected {
+  background: var(--selection) !important;
+}
+
+.CodeMirror-focused .CodeMirror-selected {
+  background: var(--selection) !important;
+}
+
+.CodeMirror-activeline-background {
+  background: var(--active-line);
+}
+
+.CodeMirror-cursor {
+  border-left: 2px solid var(--accent);
+  border-right: none;
+}
+
+.CodeMirror-matchingbracket {
+  color: var(--accent) !important;
+  border-bottom: 1px solid var(--accent);
+}
+
+.cm-header,
+.cm-header-1,
+.cm-header-2,
+.cm-header-3,
+.cm-header-4,
+.cm-header-5,
+.cm-header-6 {
+  color: var(--cm-heading);
+  font-weight: 650;
+}
+
+.cm-formatting-header {
+  color: var(--cm-comment);
+  font-weight: 500;
+}
+
+.cm-em {
+  color: var(--cm-emphasis);
+  font-style: italic;
+}
+
+.cm-strong {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.cm-link {
+  color: var(--cm-link);
+}
+
+.cm-url,
+.cm-string {
+  color: var(--cm-quote);
+}
+
+.cm-quote {
+  color: var(--cm-quote);
+}
+
+.cm-comment {
+  color: var(--cm-comment);
+}
+
+.cm-inline-code,
+.cm-code {
+  color: var(--cm-code);
+}
+
+.cm-hr {
+  color: var(--fg-faint);
+}
+
+/* 预览滚动区 */
+.preview-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+}
+
+#preview {
+  padding-bottom: 120px;
+}
+
+#preview:empty::before {
+  content: "预览将在这里实时呈现";
+  display: block;
+  padding: 26px 38px;
+  font-size: 13px;
+  color: var(--fg-faint);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 128, 0.28);
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 128, 0.45);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
