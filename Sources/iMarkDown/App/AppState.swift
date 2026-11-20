@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import MarkdownKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -36,9 +37,18 @@ final class AppState: ObservableObject {
     @Published var activeAlert: AppAlert?
     @Published var isEditorReady = false
     @Published var isExporting = false
+    @Published var outline: [OutlineItem] = []
+    /// 外部修改选择「保留当前内容」后暂停自动保存，避免覆盖对方写入。
+    @Published private(set) var isAutosaveSuspended = false
 
     private var autosaveTask: Task<Void, Never>?
+    private var draftTask: Task<Void, Never>?
+    private let drafts = DraftStore()
+    private var didOfferDraftRecovery = false
     private var cancellables = Set<AnyCancellable>()
+    private var fileWatcher: DispatchSourceFileSystemObject?
+    private var externalCheckTask: Task<Void, Never>?
+    private var isHandlingExternalChange = false
 
     init(
         settings: AppSettings? = nil,
@@ -71,7 +81,7 @@ final class AppState: ObservableObject {
         case .idle:
             return session.url == nil ? "未命名草稿" : "已就绪"
         case .unsaved:
-            return "未保存"
+            return isAutosaveSuspended ? "未保存 · 自动保存已暂停" : "未保存"
         case .saving:
             return "正在保存…"
         case .saved(let date):
@@ -98,8 +108,10 @@ final class AppState: ObservableObject {
         case .change(let text, let stats):
             session.text = text
             self.stats = stats
+            outline = OutlineParser.parse(text)
             if session.url == nil {
                 saveStatus = session.text.isEmpty ? .idle : .unsaved
+                scheduleDraftSave()
             } else {
                 saveStatus = session.isDirty ? .unsaved : .saved(.now)
             }
@@ -113,6 +125,9 @@ final class AppState: ObservableObject {
 
         case .saveRequested:
             save()
+
+        case .imagePasted(let data, let mime, let filename):
+            insertPastedImage(data: data, mime: mime, filename: filename)
 
         case .log(let message):
             print("[web] \(message)")
@@ -172,8 +187,12 @@ final class AppState: ObservableObject {
     func newDocument() {
         guard confirmDiscardIfNeeded() else { return }
         autosaveTask?.cancel()
+        stopFileWatcher()
+        discardDraft()
+        isAutosaveSuspended = false
         session = .untitled()
         stats = .zero
+        outline = []
         saveStatus = .idle
         mode = .split
         editor.setMode(.split)
@@ -201,6 +220,11 @@ final class AppState: ObservableObject {
         panel.canCreateDirectories = false
         panel.prompt = "打开文件夹"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        openFolder(at: url)
+    }
+
+    /// 从最近文件夹历史或拖拽直接打开文件树。
+    func openFolder(at url: URL) {
         workspace.openFolder(url)
         if let current = session.url {
             workspace.reveal(current)
@@ -215,16 +239,29 @@ final class AppState: ObservableObject {
 
     private func open(url: URL) {
         do {
-            let text = try FileService.read(from: url)
+            let standardized = url.standardizedFileURL
+            let text = try FileService.read(from: standardized)
+
+            // 打开的文件不属于当前文件树时，收起文件树；该文件夹已进入最近文件夹历史。
+            // 用户想恢复时可直接从侧边栏历史入口重新打开。
+            if let root = workspace.rootURL,
+               !standardized.path.hasPrefix(root.path.hasSuffix("/") ? root.path : root.path + "/") {
+                workspace.closeFolder()
+            }
+
             autosaveTask?.cancel()
-            session = DocumentSession(url: url, text: text, savedText: text)
+            discardDraft()
+            isAutosaveSuspended = false
+            session = DocumentSession(url: standardized, text: text, savedText: text)
             session.loadedAt = .now
             stats = DocumentStats.from(text: text)
+            outline = OutlineParser.parse(text)
             saveStatus = .saved(.now)
-            recents.record(url)
-            workspace.reveal(url)
+            recents.record(standardized)
+            workspace.reveal(standardized)
             editor.setDocument(text: text, baseDirectory: session.baseDirectoryURL)
             editor.setMode(mode)
+            startFileWatcher(for: standardized)
         } catch {
             present(error)
         }
@@ -281,8 +318,11 @@ final class AppState: ObservableObject {
             session.savedText = text
             session.url = url
             saveStatus = .saved(.now)
+            isAutosaveSuspended = false
+            discardDraft()
             recents.record(url)
             pushEditorConfig()
+            startFileWatcher(for: url)
             return true
         } catch {
             saveStatus = .failed(error.localizedDescription)
@@ -292,11 +332,12 @@ final class AppState: ObservableObject {
     }
 
     private func scheduleAutosave() {
-        guard settings.autoSaveEnabled, session.url != nil else { return }
+        guard settings.autoSaveEnabled, session.url != nil, !isAutosaveSuspended else { return }
         autosaveTask?.cancel()
         autosaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled, let self else { return }
+            guard !self.isAutosaveSuspended else { return }
             guard self.session.isDirty, let url = self.session.url else { return }
             do {
                 self.saveStatus = .saving
@@ -307,6 +348,98 @@ final class AppState: ObservableObject {
                 self.saveStatus = .failed(error.localizedDescription)
             }
         }
+    }
+
+    // MARK: - 未命名草稿
+
+    /// 未命名文档没有磁盘路径，自动保存无从谈起，用 Application Support 里的草稿兜底。
+    private func scheduleDraftSave() {
+        guard session.url == nil else { return }
+        draftTask?.cancel()
+        let text = session.text
+        draftTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled, let self else { return }
+            if text.isEmpty {
+                self.drafts.clear()
+            } else {
+                try? self.drafts.write(text)
+            }
+        }
+    }
+
+    /// 启动时检查上次异常退出遗留的草稿，只提示一次。
+    func offerDraftRecoveryIfNeeded() {
+        guard !didOfferDraftRecovery else { return }
+        didOfferDraftRecovery = true
+        guard session.url == nil, session.text.isEmpty,
+              let draft = drafts.read(),
+              !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "发现上次未保存的草稿"
+        alert.informativeText = "应用上次退出前有正在编辑的未命名文档，是否恢复？"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "恢复草稿")
+        alert.addButton(withTitle: "丢弃")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            session = DocumentSession(url: nil, text: draft, savedText: "")
+            stats = DocumentStats.from(text: draft)
+            outline = OutlineParser.parse(draft)
+            saveStatus = .unsaved
+            editor.setDocument(text: draft, baseDirectory: nil)
+            editor.setMode(mode)
+        } else {
+            discardDraft()
+        }
+    }
+
+    /// 退出时选择「不保存」、或文档已落盘后，删除兜底草稿。
+    func discardDraft() {
+        draftTask?.cancel()
+        draftTask = nil
+        drafts.clear()
+    }
+
+    // MARK: - 图片插入
+
+    /// 粘贴 / 拖入的图片写入文档同级的 assets 目录，正文里只保留相对路径。
+    private func insertPastedImage(data: Data, mime: String, filename: String) {
+        guard let documentURL = session.url else {
+            present(title: "请先保存文档", message: "图片需要保存到文档同级的 assets 文件夹，请先保存当前文档。")
+            return
+        }
+        do {
+            let assets = documentURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("assets", isDirectory: true)
+            try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+            let ext = Self.imageExtension(mime: mime, filename: filename)
+            let stamp = Int(Date().timeIntervalSince1970)
+            let suffix = UUID().uuidString.prefix(6).lowercased()
+            let name = "image-\(stamp)-\(suffix).\(ext)"
+            try data.write(to: assets.appendingPathComponent(name), options: .atomic)
+            editor.insertImage("assets/\(name)")
+        } catch {
+            present(error)
+        }
+    }
+
+    private static func imageExtension(mime: String, filename: String) -> String {
+        let byMime = [
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+            "image/heic": "heic",
+            "image/tiff": "tiff"
+        ]
+        if let ext = byMime[mime.lowercased()] { return ext }
+        let ext = (filename as NSString).pathExtension.lowercased()
+        return ext.isEmpty ? "png" : ext
     }
 
     private func confirmDiscardIfNeeded() -> Bool {
@@ -418,6 +551,153 @@ final class AppState: ObservableObject {
 
     func wrap(_ before: String, _ after: String) {
         editor.wrap(before, after)
+    }
+
+    // MARK: - 大纲与拖拽
+
+    /// 点击大纲条目：预览不可见时切回分栏，保证跳转结果可见。
+    func jumpToOutline(_ item: OutlineItem) {
+        if mode == .source {
+            setMode(.split)
+        }
+        editor.scrollToHeading(item.index)
+    }
+
+    func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        if let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }) {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, _ in
+                var url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else if let nsURL = item as? NSURL {
+                    url = nsURL as URL
+                } else if let value = item as? URL {
+                    url = value
+                }
+                guard let url else { return }
+
+                Task { @MainActor in
+                    var isDirectory: ObjCBool = false
+                    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
+                    if isDirectory.boolValue {
+                        self?.openFolder(at: url)
+                    } else if Self.imageFileExtensions.contains(url.pathExtension.lowercased()) {
+                        if let data = try? Data(contentsOf: url) {
+                            self?.insertPastedImage(data: data, mime: "", filename: url.lastPathComponent)
+                        }
+                    } else {
+                        let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "txt"]
+                        guard markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
+                        self?.requestOpen(url: url)
+                    }
+                }
+            }
+            return true
+        }
+
+        // 浏览器 / 截图工具拖入的是图片数据而非文件路径。
+        if let imageProvider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }) {
+            // public.image 只是抽象类型，实际数据挂在具体类型（public.png 等）下。
+            let typeID = imageProvider.registeredTypeIdentifiers.first {
+                UTType($0)?.conforms(to: .image) == true
+            } ?? UTType.image.identifier
+            let mime = UTType(typeID)?.preferredMIMEType ?? "image/png"
+            imageProvider.loadDataRepresentation(forTypeIdentifier: typeID) { [weak self] data, _ in
+                guard let data else { return }
+                Task { @MainActor in
+                    self?.insertPastedImage(data: data, mime: mime, filename: "")
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private static let imageFileExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "bmp"
+    ]
+
+    // MARK: - 外部修改检测
+
+    /// 监听当前文档的写入 / 重命名事件，避免其他程序改动被自动保存覆盖。
+    private func startFileWatcher(for url: URL) {
+        stopFileWatcher()
+
+        let fd = Darwin.open(url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .rename, .delete],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                self?.scheduleExternalCheck()
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        fileWatcher = source
+    }
+
+    private func stopFileWatcher() {
+        externalCheckTask?.cancel()
+        externalCheckTask = nil
+        fileWatcher?.cancel()
+        fileWatcher = nil
+    }
+
+    /// 写入时文件系统会连发多次事件，合并成一次检查，避免重复弹窗。
+    private func scheduleExternalCheck() {
+        externalCheckTask?.cancel()
+        externalCheckTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            self?.reloadIfChangedOnDisk()
+        }
+    }
+
+    private func reloadIfChangedOnDisk() {
+        guard let url = session.url, !isHandlingExternalChange else { return }
+        guard let disk = try? FileService.read(from: url), disk != session.savedText else { return }
+
+        isHandlingExternalChange = true
+        defer { isHandlingExternalChange = false }
+
+        let alert = NSAlert()
+        alert.messageText = "文件已在其他程序中修改"
+        alert.informativeText = "磁盘上的「\(url.lastPathComponent)」与当前编辑内容不一致。重新载入会丢弃当前未保存的修改。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "重新载入")
+        alert.addButton(withTitle: "保留当前内容")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            autosaveTask?.cancel()
+            session.text = disk
+            session.savedText = disk
+            stats = DocumentStats.from(text: disk)
+            outline = OutlineParser.parse(disk)
+            saveStatus = .saved(.now)
+            editor.setDocument(text: disk, baseDirectory: session.baseDirectoryURL)
+            editor.setMode(mode)
+        } else {
+            // 用户选择保留自己的内容：暂停自动保存，避免把对方刚写入的版本覆盖掉。
+            // 手动 ⌘S 仍可显式覆盖保存并解除暂停。
+            autosaveTask?.cancel()
+            isAutosaveSuspended = true
+            // 视为有意忽略该次外部修改，避免同一内容反复弹窗。
+            session.savedText = disk
+            saveStatus = .unsaved
+        }
+
+        // rename / delete 会让旧描述符失效，重新挂接监听。
+        startFileWatcher(for: url)
     }
 
     // MARK: - 提示

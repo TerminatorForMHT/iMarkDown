@@ -48,6 +48,23 @@
     </section>
   </div>
 
+  <div id="find-bar" class="find-bar" hidden>
+    <div class="find-row">
+      <input id="find-input" type="text" placeholder="查找" autocomplete="off" spellcheck="false">
+      <span id="find-count" class="find-count">0/0</span>
+      <button type="button" data-find="case" title="区分大小写">Aa</button>
+      <button type="button" data-find="regex" title="正则表达式">.*</button>
+      <button type="button" data-find="prev" title="上一个 (⇧⌘G)">↑</button>
+      <button type="button" data-find="next" title="下一个 (⌘G)">↓</button>
+      <button type="button" data-find="close" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="find-row">
+      <input id="replace-input" type="text" placeholder="替换为" autocomplete="off" spellcheck="false">
+      <button type="button" data-find="replace">替换</button>
+      <button type="button" data-find="replace-all">全部替换</button>
+    </div>
+  </div>
+
   <script src="vendor/codemirror/codemirror.min.js"></script>
   <script src="vendor/codemirror/mode/xml.min.js"></script>
   <script src="vendor/codemirror/mode/javascript.min.js"></script>

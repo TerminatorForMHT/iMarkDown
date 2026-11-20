@@ -8,12 +8,15 @@ enum EditorEvent {
     case stats(DocumentStats)
     case link(href: String)
     case saveRequested
+    case imagePasted(data: Data, mime: String, filename: String)
     case log(String)
 }
 
 /// Web → 原生单向事件通道。只接受白名单消息类型，不执行任意脚本。
 final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var onEvent: ((EditorEvent) -> Void)?
+    /// Web 内容进程被系统回收 / 崩溃时触发，由外壳负责重载并回填文档。
+    var onWebProcessTerminated: (() -> Void)?
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "editor",
@@ -37,6 +40,17 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             }
         case "save":
             onEvent?(.saveRequested)
+        case "image":
+            // 图片以 base64 传输，原生侧解码后落盘到文档同级 assets 目录。
+            guard let base64 = payload["data"] as? String,
+                  let data = Data(base64Encoded: base64) else {
+                break
+            }
+            onEvent?(.imagePasted(
+                data: data,
+                mime: payload["mime"] as? String ?? "",
+                filename: payload["name"] as? String ?? ""
+            ))
         case "log":
             if let text = payload["text"] as? String {
                 onEvent?(.log(text))
@@ -44,6 +58,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         default:
             break
         }
+    }
+
+    /// 内容进程被系统回收（内存压力）或崩溃：通知外壳重建编辑器，避免永久白屏。
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        onWebProcessTerminated?()
     }
 
     /// 拦截 Web 内点击链接，交给原生用系统浏览器 / 文件关联打开。

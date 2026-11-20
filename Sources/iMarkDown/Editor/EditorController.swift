@@ -64,6 +64,8 @@ final class EditorController: ObservableObject {
 
     func markUnready() {
         isReady = false
+        // 旧页面的待执行脚本不能带到新页面，否则会重复设置文档。
+        pendingScripts.removeAll()
     }
 
     func setDocument(text: String, baseDirectory: String?) {
@@ -86,8 +88,28 @@ final class EditorController: ObservableObject {
         run("window.MD.insert(\(JS.encode(text)))")
     }
 
+    func insertImage(_ path: String) {
+        run("window.MD.insertImage(\(JS.encode(path)))")
+    }
+
     func focus() {
         run("window.MD.focus()")
+    }
+
+    func openFind() {
+        run("window.MD.openFind()")
+    }
+
+    func findNext() {
+        run("window.MD.findNext()")
+    }
+
+    func findPrevious() {
+        run("window.MD.findPrevious()")
+    }
+
+    func scrollToHeading(_ index: Int) {
+        run("window.MD.scrollToHeading(\(index))")
     }
 
     func currentText() async throws -> String {

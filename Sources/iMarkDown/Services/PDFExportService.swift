@@ -19,7 +19,8 @@ enum ExportError: LocalizedError {
 @MainActor
 enum PDFExportService {
     static func export(html: String, baseURL: URL?, to destination: URL) async throws {
-        let pageSize = NSSize(width: 595, height: 842)
+        // A4 纵向（单位：point）。
+        let pageSize = NSSize(width: 595.2, height: 841.8)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
 
@@ -47,12 +48,15 @@ enum PDFExportService {
 
         let printInfo = NSPrintInfo()
         printInfo.paperSize = pageSize
-        printInfo.topMargin = 42
-        printInfo.bottomMargin = 42
-        printInfo.leftMargin = 46
-        printInfo.rightMargin = 46
-        printInfo.horizontalPagination = .automatic
+        printInfo.orientation = .portrait
+        printInfo.topMargin = 48
+        printInfo.bottomMargin = 48
+        printInfo.leftMargin = 52
+        printInfo.rightMargin = 52
+        printInfo.horizontalPagination = .fit
         printInfo.verticalPagination = .automatic
+        printInfo.isHorizontallyCentered = true
+        printInfo.isVerticallyCentered = false
         printInfo.jobDisposition = .save
         printInfo.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = destination as NSURL
 
@@ -75,8 +79,24 @@ private final class WebPageLoader: NSObject, WKNavigationDelegate {
             webView.navigationDelegate = self
             webView.loadHTMLString(html, baseURL: baseURL)
         }
-        // 给字体、图片与样式一点排版时间，避免打印出空页。
-        try? await Task.sleep(nanoseconds: 350_000_000)
+        // 等待图片解码完成，避免打印出缺少插图的页面。
+        let waitScript = """
+        await Promise.all(Array.from(document.images).map(function (img) {
+          if (img.complete) { return true; }
+          return new Promise(function (resolve) {
+            img.addEventListener('load', resolve, { once: true });
+            img.addEventListener('error', resolve, { once: true });
+          });
+        }));
+        """
+        _ = try? await webView.callAsyncJavaScript(
+            waitScript,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        // 给字体与样式一点排版时间，避免打印出空页。
+        try? await Task.sleep(nanoseconds: 150_000_000)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

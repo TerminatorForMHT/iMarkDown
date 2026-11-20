@@ -20,6 +20,10 @@
   var placeholder = document.getElementById('source-placeholder');
   var lightSheet = document.getElementById('hljs-light');
   var darkSheet = document.getElementById('hljs-dark');
+  var findBar = document.getElementById('find-bar');
+  var findInput = document.getElementById('find-input');
+  var replaceInput = document.getElementById('replace-input');
+  var findCount = document.getElementById('find-count');
 
   var state = {
     appearance: root.dataset.appearance || 'light',
@@ -43,6 +47,10 @@
     scrollbarStyle: 'native',
     extraKeys: {
       'Cmd-S': function () { post('save'); },
+      'Cmd-F': function () { openFind(); },
+      'Cmd-G': function () { findNext(); },
+      'Shift-Cmd-G': function () { findPrevious(); },
+      'Esc': function () { closeFind(); },
       'Cmd-B': function () { wrap('**', '**'); },
       'Cmd-I': function () { wrap('_', '_'); }
     }
@@ -55,8 +63,25 @@
   // MARK: - 渲染
 
   var renderQueued = false;
+  var renderTimer = null;
+  // 超过阈值后放弃逐帧渲染，改为低频合并，避免输入时主线程被 marked 占满。
+  var LARGE_DOCUMENT = 120000;
+  // 再大则只做纯文本预览，Markdown 解析与代码高亮全部跳过。
+  var HUGE_DOCUMENT = 600000;
+  var HIGHLIGHT_LIMIT = 250000;
 
   function scheduleRender() {
+    var length = cm.getValue().length;
+
+    if (length > LARGE_DOCUMENT) {
+      if (renderTimer) { clearTimeout(renderTimer); }
+      renderTimer = setTimeout(function () {
+        renderTimer = null;
+        render();
+      }, 400);
+      return;
+    }
+
     if (renderQueued) { return; }
     renderQueued = true;
     requestAnimationFrame(function () {
@@ -67,6 +92,16 @@
 
   function render() {
     var text = cm.getValue();
+
+    if (text.length > HUGE_DOCUMENT) {
+      preview.classList.add('is-plain');
+      preview.textContent = text;
+      previewHint.textContent = '大文件纯文本预览';
+      updatePlaceholder();
+      return;
+    }
+
+    preview.classList.remove('is-plain');
     var html = '';
 
     try {
@@ -82,7 +117,8 @@
     }
 
     rewriteImages();
-    highlightCode();
+    decorateHeadings();
+    highlightCode(text.length <= HIGHLIGHT_LIMIT);
     updatePlaceholder();
     previewHint.textContent = state.mode === 'preview' ? '阅读模式' : '实时渲染';
   }
@@ -94,8 +130,41 @@
       .replace(/>/g, '&gt;');
   }
 
-  function highlightCode() {
-    if (!window.hljs) { return; }
+  /// marked 不生成标题 id，这里补齐，让 [文字](#标题) 这类锚点可以跳转。
+  /// 保留中日韩文字，空格转连字符，重名加 -1 / -2 后缀。
+  function slugify(value) {
+    var slug = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[`*_~]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/[^\p{L}\p{N}\-_.]/gu, '');
+    return slug || 'section';
+  }
+
+  function decorateHeadings() {
+    var headings = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
+    var used = {};
+    for (var i = 0; i < headings.length; i += 1) {
+      var node = headings[i];
+      if (node.id) {
+        used[node.id] = (used[node.id] || 0) + 1;
+        continue;
+      }
+      var base = slugify(node.textContent);
+      var candidate = base;
+      var count = used[base] || 0;
+      while (used[candidate]) {
+        count += 1;
+        candidate = base + '-' + count;
+      }
+      used[candidate] = 1;
+      node.id = candidate;
+    }
+  }
+
+  function highlightCode(enabled) {
+    if (!window.hljs || enabled === false) { return; }
     var blocks = preview.querySelectorAll('pre code');
     for (var i = 0; i < blocks.length; i += 1) {
       blocks[i].removeAttribute('data-highlighted');
@@ -151,6 +220,278 @@
     };
   }
 
+  // MARK: - 查找与替换
+
+  var findState = {
+    open: false,
+    matches: [],
+    marks: [],
+    caseSensitive: false,
+    useRegex: false
+  };
+
+  // 高亮过多会拖慢渲染，超过上限时只保留计数与逐条跳转。
+  var MAX_FIND_MARKS = 400;
+
+  function openFind() {
+    if (!findBar) { return; }
+    findState.open = true;
+    findBar.hidden = false;
+
+    var selection = cm.getSelection();
+    if (selection && selection.indexOf('\n') === -1) {
+      findInput.value = selection;
+    }
+    syncFindToggles();
+    findInput.focus();
+    findInput.select();
+    refreshFind();
+  }
+
+  function closeFind() {
+    if (!findBar) { return; }
+    findState.open = false;
+    findBar.hidden = true;
+    findState.matches = [];
+    clearFindMarks();
+    if (replaceInput) { replaceInput.blur(); }
+    cm.focus();
+  }
+
+  function syncFindToggles() {
+    if (!findBar) { return; }
+    var caseButton = findBar.querySelector('[data-find="case"]');
+    var regexButton = findBar.querySelector('[data-find="regex"]');
+    if (caseButton) { caseButton.classList.toggle('is-on', findState.caseSensitive); }
+    if (regexButton) { regexButton.classList.toggle('is-on', findState.useRegex); }
+  }
+
+  function clearFindMarks() {
+    for (var i = 0; i < findState.marks.length; i += 1) {
+      findState.marks[i].clear();
+    }
+    findState.marks = [];
+  }
+
+  /// 统一返回 {start, end} 区间，普通查找与正则共用同一套选中/替换逻辑。
+  function findMatches() {
+    var query = findInput ? findInput.value : '';
+    var matches = [];
+    if (!query) { return matches; }
+
+    var text = cm.getValue();
+
+    if (findState.useRegex) {
+      var re;
+      try {
+        re = new RegExp(query, findState.caseSensitive ? 'g' : 'gi');
+      } catch (error) {
+        return matches;
+      }
+      var result;
+      while ((result = re.exec(text)) !== null) {
+        if (!result[0].length) {
+          re.lastIndex += 1;
+          continue;
+        }
+        matches.push({ start: result.index, end: result.index + result[0].length });
+        if (matches.length > 5000) { break; }
+      }
+      return matches;
+    }
+
+    var haystack = findState.caseSensitive ? text : text.toLowerCase();
+    var needle = findState.caseSensitive ? query : query.toLowerCase();
+    var index = haystack.indexOf(needle);
+    while (index !== -1) {
+      matches.push({ start: index, end: index + needle.length });
+      index = haystack.indexOf(needle, index + needle.length);
+      if (matches.length > 5000) { break; }
+    }
+    return matches;
+  }
+
+  function findCurrentIndex() {
+    var matches = findState.matches;
+    if (!matches.length) { return -1; }
+    var cursor = cm.indexFromPos(cm.getCursor('from'));
+    for (var i = 0; i < matches.length; i += 1) {
+      if (matches[i].start === cursor) { return i; }
+    }
+    for (var j = 0; j < matches.length; j += 1) {
+      if (cursor > matches[j].start && cursor <= matches[j].end) { return j; }
+    }
+    return -1;
+  }
+
+  function highlightMatches() {
+    clearFindMarks();
+    if (!findState.open) { return; }
+    var matches = findState.matches;
+    if (!matches.length || matches.length > MAX_FIND_MARKS) { return; }
+
+    var current = findCurrentIndex();
+    for (var i = 0; i < matches.length; i += 1) {
+      var handle = cm.markText(
+        cm.posFromIndex(matches[i].start),
+        cm.posFromIndex(matches[i].end),
+        { className: i === current ? 'cm-find-current' : 'cm-find-match' }
+      );
+      findState.marks.push(handle);
+    }
+  }
+
+  function refreshFind() {
+    findState.matches = findState.open ? findMatches() : [];
+    updateFindCount();
+    highlightMatches();
+  }
+
+  function updateFindCount() {
+    if (!findCount || !findInput) { return; }
+    var total = findState.matches.length;
+    if (!total) {
+      findCount.textContent = '0/0';
+      return;
+    }
+    var current = findCurrentIndex();
+    findCount.textContent = (current >= 0 ? current + 1 : 0) + '/' + total;
+  }
+
+  function selectMatch(match) {
+    var from = cm.posFromIndex(match.start);
+    var to = cm.posFromIndex(match.end);
+    cm.setSelection(from, to);
+    cm.scrollIntoView({ from: from, to: to }, 80);
+    cm.focus();
+    updateFindCount();
+    highlightMatches();
+  }
+
+  function findNext() {
+    if (!findInput || !findInput.value) { return; }
+    refreshFind();
+    if (!findState.matches.length) { return; }
+
+    var from = cm.indexFromPos(cm.getCursor('to'));
+    var target = findState.matches[0];
+    for (var i = 0; i < findState.matches.length; i += 1) {
+      if (findState.matches[i].start >= from) {
+        target = findState.matches[i];
+        break;
+      }
+    }
+    selectMatch(target);
+  }
+
+  function findPrevious() {
+    if (!findInput || !findInput.value) { return; }
+    refreshFind();
+    if (!findState.matches.length) { return; }
+
+    var from = cm.indexFromPos(cm.getCursor('from'));
+    var target = findState.matches[findState.matches.length - 1];
+    for (var i = findState.matches.length - 1; i >= 0; i -= 1) {
+      if (findState.matches[i].start < from) {
+        target = findState.matches[i];
+        break;
+      }
+    }
+    selectMatch(target);
+  }
+
+  function replaceCurrent() {
+    var query = findInput ? findInput.value : '';
+    if (!query) { return; }
+    refreshFind();
+    if (!findState.matches.length) { return; }
+
+    var replacement = replaceInput ? replaceInput.value : '';
+    var current = findCurrentIndex();
+
+    // 选区恰好就是某个匹配时直接替换，否则先定位到当前匹配再替换。
+    if (current >= 0) {
+      var match = findState.matches[current];
+      var from = cm.getCursor('from');
+      var to = cm.getCursor('to');
+      var matchFrom = cm.posFromIndex(match.start);
+      var matchTo = cm.posFromIndex(match.end);
+      if (from.line !== matchFrom.line || from.ch !== matchFrom.ch ||
+          to.line !== matchTo.line || to.ch !== matchTo.ch) {
+        cm.setSelection(matchFrom, matchTo);
+      }
+      cm.replaceSelection(replacement);
+    }
+    findNext();
+  }
+
+  function replaceAll() {
+    var query = findInput ? findInput.value : '';
+    if (!query) { return; }
+    refreshFind();
+    var matches = findState.matches;
+    if (!matches.length) { return; }
+
+    var replacement = replaceInput ? replaceInput.value : '';
+    // 从后往前替换，保证前面的偏移量不失效，同时保留撤销历史。
+    cm.operation(function () {
+      for (var i = matches.length - 1; i >= 0; i -= 1) {
+        cm.replaceRange(
+          replacement,
+          cm.posFromIndex(matches[i].start),
+          cm.posFromIndex(matches[i].end)
+        );
+      }
+    });
+    refreshFind();
+  }
+
+  if (findBar) {
+    findBar.addEventListener('click', function (event) {
+      var action = event.target.getAttribute ? event.target.getAttribute('data-find') : null;
+      if (!action) { return; }
+      if (action === 'prev') { findPrevious(); }
+      else if (action === 'next') { findNext(); }
+      else if (action === 'replace') { replaceCurrent(); }
+      else if (action === 'replace-all') { replaceAll(); }
+      else if (action === 'close') { closeFind(); }
+      else if (action === 'case') {
+        findState.caseSensitive = !findState.caseSensitive;
+        syncFindToggles();
+        refreshFind();
+      } else if (action === 'regex') {
+        findState.useRegex = !findState.useRegex;
+        syncFindToggles();
+        refreshFind();
+      }
+    });
+  }
+
+  if (findInput) {
+    findInput.addEventListener('input', refreshFind);
+    findInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        if (event.shiftKey) { findPrevious(); } else { findNext(); }
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeFind();
+      }
+    });
+  }
+
+  if (replaceInput) {
+    replaceInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        replaceCurrent();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeFind();
+      }
+    });
+  }
+
   // MARK: - 输入与滚动
 
   var changeTimer = null;
@@ -159,16 +500,50 @@
     if (state.suppress) { return; }
     scheduleRender();
     updatePlaceholder();
+    if (findState.open) { refreshFind(); }
 
     if (changeTimer) { clearTimeout(changeTimer); }
     changeTimer = setTimeout(function () {
       var text = cm.getValue();
       post('change', { text: text, stats: computeStats(text) });
-    }, 140);
+    }, cm.getValue().length > LARGE_DOCUMENT ? 600 : 140);
   });
 
   cm.on('focus', updatePlaceholder);
   cm.on('blur', updatePlaceholder);
+
+  // 粘贴图片：读成 base64 交给原生保存到文档同级 assets/，再插入相对路径。
+  function readImageFile(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var result = String(reader.result || '');
+      var comma = result.indexOf(',');
+      if (comma === -1) { return; }
+      post('image', {
+        data: result.slice(comma + 1),
+        mime: file.type || 'image/png',
+        name: file.name || ''
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleImagePaste(event) {
+    var items = event.clipboardData && event.clipboardData.items;
+    if (!items) { return; }
+    var handled = false;
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i].kind === 'file' && items[i].type && items[i].type.indexOf('image/') === 0) {
+        var file = items[i].getAsFile();
+        if (!file) { continue; }
+        handled = true;
+        readImageFile(file);
+      }
+    }
+    if (handled) { event.preventDefault(); }
+  }
+
+  cm.getWrapperElement().addEventListener('paste', handleImagePaste, false);
 
   var syncingScroll = false;
 
@@ -221,6 +596,8 @@
 
   function setDocument(text, baseDirectory) {
     state.suppress = true;
+    clearFindMarks();
+    findState.matches = [];
     cm.setValue(typeof text === 'string' ? text : '');
     cm.clearHistory();
     if (typeof baseDirectory === 'string') { state.baseDirectory = baseDirectory; }
@@ -231,6 +608,7 @@
     previewScroll.scrollTop = 0;
 
     render();
+    if (findState.open) { refreshFind(); }
     cm.refresh();
     post('stats', computeStats(cm.getValue()));
   }
@@ -292,13 +670,49 @@
     cm.focus();
   }
 
+  /// 图片按块插入：行首/行尾/行中分别补换行，避免和相邻标题或正文粘连。
+  function insertImage(path) {
+    var cursor = cm.getCursor();
+    var line = cm.getLine(cursor.line) || '';
+    var before = '';
+    var after = '';
+
+    if (line.length > 0) {
+      if (cursor.ch === 0) {
+        after = '\n';
+      } else if (cursor.ch >= line.length) {
+        before = '\n';
+      } else {
+        before = '\n\n';
+        after = '\n';
+      }
+    }
+
+    cm.replaceSelection(before + '![](' + path + ')' + after);
+    cm.focus();
+  }
+
+  /// 大纲跳转：按标题在预览中的出现顺序定位，避免依赖标题 id。
+  function scrollToHeading(index) {
+    var headings = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
+    var target = headings[index];
+    if (!target) { return; }
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   window.MD = {
     setDocument: setDocument,
     setMode: setMode,
     applyConfig: applyConfig,
     wrap: wrap,
     insert: insert,
+    insertImage: insertImage,
     focus: function () { cm.focus(); },
+    openFind: openFind,
+    findNext: findNext,
+    findPrevious: findPrevious,
+    closeFind: closeFind,
+    scrollToHeading: scrollToHeading,
     getText: function () { return cm.getValue(); },
     getArticleHTML: function () { return preview.innerHTML; }
   };

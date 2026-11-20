@@ -4,24 +4,16 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject private var state: AppState
-    @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
         List {
+            outlineSection
+
             FileTreeSection(workspace: state.workspace)
 
-            recentSection
+            FolderHistorySection(workspace: state.workspace)
 
-            Section("外观") {
-                Picker("外观", selection: $settings.appearance) {
-                    ForEach(AppearancePreference.allCases) { preference in
-                        Text(preference.title).tag(preference)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.vertical, 4)
-            }
+            recentSection
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top) { brand }
@@ -31,6 +23,40 @@ struct SidebarView: View {
                 .padding(.bottom, 12)
         }
         .navigationTitle("iMarkDown")
+    }
+
+    private var outlineSection: some View {
+        Section {
+            if state.outline.isEmpty {
+                Text("当前文档暂无标题")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(state.outline) { item in
+                    Button {
+                        state.jumpToOutline(item)
+                    } label: {
+                        HStack(spacing: 0) {
+                            Text(item.title)
+                                .font(.system(
+                                    size: item.level <= 2 ? 12 : 11.5,
+                                    weight: item.level == 1 ? .semibold : .regular
+                                ))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.leading, CGFloat(max(0, item.level - 1)) * 10)
+                        .padding(.vertical, 1)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("大纲")
+        }
     }
 
     private var recentSection: some View {
@@ -58,7 +84,29 @@ struct SidebarView: View {
                 }
             }
         } header: {
-            Text("最近打开")
+            HStack {
+                Text("最近打开")
+                Spacer(minLength: 4)
+
+                Menu {
+                    Button("清理失效记录") {
+                        state.recents.clearMissing()
+                    }
+                    .disabled(!state.recents.items.contains { !$0.exists })
+
+                    Button("清空最近打开") {
+                        state.recents.clearAll()
+                    }
+                    .disabled(state.recents.items.isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
         }
     }
 
@@ -86,7 +134,16 @@ struct SidebarView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
-            Spacer()
+            Spacer(minLength: 8)
+
+            // 外观、字号等偏好已统一收敛到「设置」，这里提供一个就近入口。
+            SettingsLink {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("设置")
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -202,6 +259,7 @@ private struct FileTreeSection: View {
                 .truncationMode(.middle)
             Spacer(minLength: 4)
 
+            // 未打开文件夹时由列表内的空状态提供入口，避免两个「打开文件夹」重复出现。
             if workspace.rootURL != nil {
                 headerButton("arrow.clockwise", help: "刷新文件树") {
                     workspace.reload()
@@ -209,9 +267,9 @@ private struct FileTreeSection: View {
                 headerButton("xmark", help: "关闭文件夹") {
                     workspace.closeFolder()
                 }
-            }
-            headerButton("folder.badge.plus", help: "打开文件夹") {
-                state.openFolder()
+                headerButton("folder.badge.plus", help: "切换文件夹") {
+                    state.openFolder()
+                }
             }
         }
     }
@@ -228,6 +286,92 @@ private struct FileTreeSection: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
+    }
+}
+
+private struct FolderHistorySection: View {
+    @EnvironmentObject private var state: AppState
+    @ObservedObject var workspace: WorkspaceStore
+
+    var body: some View {
+        if workspace.rootURL == nil, !workspace.recentFolders.isEmpty {
+            Section {
+                ForEach(workspace.recentFolders) { folder in
+                    Button {
+                        state.openFolder(at: folder.url)
+                    } label: {
+                        FolderHistoryRow(folder: folder)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!folder.exists)
+                    .contextMenu {
+                        Button("在 Finder 中显示") {
+                            NSWorkspace.shared.activateFileViewerSelecting([folder.url])
+                        }
+                        Divider()
+                        Button("从历史记录中移除") {
+                            workspace.removeRecentFolder(folder)
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("最近文件夹")
+                    Spacer(minLength: 4)
+
+                    Menu {
+                        Button("清理失效记录") {
+                            workspace.pruneMissingRecentFolders()
+                        }
+                        .disabled(!workspace.recentFolders.contains { !$0.exists })
+
+                        Button("清空历史记录") {
+                            workspace.clearRecentFolders()
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+            }
+        }
+    }
+}
+
+private struct FolderHistoryRow: View {
+    let folder: RecentFolder
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "folder")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.accentColor.opacity(0.85))
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(folder.name)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .lineLimit(1)
+                Text(abbreviatedPath)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .opacity(folder.exists ? 1 : 0.45)
+    }
+
+    private var abbreviatedPath: String {
+        folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 }
 

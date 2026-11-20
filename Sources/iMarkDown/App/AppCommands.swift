@@ -40,6 +40,19 @@ struct AppCommands: Commands {
             Button("导出为 PDF…") { state.exportPDF() }
         }
 
+        CommandGroup(after: .pasteboard) {
+            Divider()
+
+            Button("查找…") { state.editor.openFind() }
+                .keyboardShortcut("f", modifiers: .command)
+
+            Button("查找下一个") { state.editor.findNext() }
+                .keyboardShortcut("g", modifiers: .command)
+
+            Button("查找上一个") { state.editor.findPrevious() }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+        }
+
         CommandMenu("格式") {
             Button("加粗") { state.wrap("**", "**") }
                 .keyboardShortcut("b", modifiers: .command)

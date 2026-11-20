@@ -17,8 +17,10 @@ struct RootView: View {
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
         .onAppear {
+            AppDelegate.shared?.appState = state
             state.applyAppearance()
             state.pushEditorConfig()
+            state.offerDraftRecoveryIfNeeded()
             if let path = CommandLine.arguments.dropFirst().first,
                FileManager.default.fileExists(atPath: path) {
                 state.requestOpen(url: URL(fileURLWithPath: path))

@@ -53,11 +53,13 @@ struct MarkdownWebView: NSViewRepresentable {
     let bridge: EditorBridge
 
     final class Coordinator {
+        let controller: EditorController
         let bridge: EditorBridge
         weak var webView: WKWebView?
         private var didLoad = false
 
-        init(bridge: EditorBridge) {
+        init(controller: EditorController, bridge: EditorBridge) {
+            self.controller = controller
             self.bridge = bridge
         }
 
@@ -65,6 +67,15 @@ struct MarkdownWebView: NSViewRepresentable {
         /// 加载 HTML 导致 WebKit 首帧瓦片层不重绘（间歇性空白）。
         func loadIfNeeded() {
             guard !didLoad, let webView else { return }
+            didLoad = true
+            loadEditor(into: webView)
+        }
+
+        /// Web 内容进程崩溃后重建页面；原生侧收到 ready 事件会重新回填文档。
+        @MainActor
+        func recover() {
+            guard let webView else { return }
+            controller.markUnready()
             didLoad = true
             loadEditor(into: webView)
         }
@@ -81,13 +92,17 @@ struct MarkdownWebView: NSViewRepresentable {
                 )
                 return
             }
-            // 允许预览读取用户文档目录中的本地图片。应用未沙盒化，v1 采用该简化策略。
-            webView.loadFileURL(indexURL, allowingReadAccessTo: URL(fileURLWithPath: "/"))
+            // 预览需要读取文档所在目录的本地图片。权限收窄到用户主目录，
+            // 不再对整个根文件系统开放；如需支持外置磁盘可在此追加挂载点。
+            webView.loadFileURL(
+                indexURL,
+                allowingReadAccessTo: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            )
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(bridge: bridge)
+        Coordinator(controller: controller, bridge: bridge)
     }
 
     func makeNSView(context: Context) -> WebViewClippingView {
@@ -132,6 +147,10 @@ struct MarkdownWebView: NSViewRepresentable {
         wrapper.addSubview(webView)
         context.coordinator.webView = webView
         controller.attach(webView)
+
+        bridge.onWebProcessTerminated = { [weak coordinator = context.coordinator] in
+            Task { @MainActor in coordinator?.recover() }
+        }
 
         // 等 wrapper 进入窗口并取得真实尺寸后再加载。
         wrapper.onLayoutReady = { [weak coordinator = context.coordinator] in

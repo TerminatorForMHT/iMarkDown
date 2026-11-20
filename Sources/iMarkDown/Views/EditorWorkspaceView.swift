@@ -1,10 +1,12 @@
 import MarkdownKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EditorWorkspaceView: View {
     @EnvironmentObject private var state: AppState
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isDropTargeted = false
 
     var body: some View {
         ZStack {
@@ -42,6 +44,22 @@ struct EditorWorkspaceView: View {
         .navigationTitle(title)
         .navigationSubtitle(state.documentSubtitle)
         .toolbar { toolbarContent }
+        .onDrop(of: [UTType.fileURL, UTType.image], isTargeted: $isDropTargeted) { providers in
+            state.handleDrop(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: DesignTokens.cardRadius, style: .continuous)
+                    .strokeBorder(
+                        Color.accentColor,
+                        style: StrokeStyle(lineWidth: 2, dash: [7, 5])
+                    )
+                    .padding(.horizontal, DesignTokens.contentInset)
+                    .padding(.top, 14)
+                    .padding(.bottom, DesignTokens.contentInset)
+                    .allowsHitTesting(false)
+            }
+        }
         .animation(.snappy(duration: 0.22), value: settings.showsStatusHUD)
     }
 
