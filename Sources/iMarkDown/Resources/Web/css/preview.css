@@ -55,7 +55,8 @@ html[data-preview="compact"] {
 .markdown-body {
   max-width: var(--md-width);
   margin: 0 auto;
-  padding: 26px 38px 40px;
+  /* 顶部留白滚入正文流中，让首行从悬浮控件下方开始。导出样式会覆盖此值。 */
+  padding: 112px 38px 40px;
   background: transparent !important;
   color: var(--md-fg);
   font-family: var(--md-font);
@@ -85,7 +86,7 @@ html[data-preview="compact"] {
   font-weight: 650;
   letter-spacing: -0.012em;
   border-bottom-color: var(--md-line);
-  scroll-margin-top: 18px;
+  scroll-margin-top: 76px;
 }
 
 .markdown-body h1 {
@@ -245,6 +246,7 @@ html[data-preview="compact"] {
   margin: 0 0.5em 0 -1.35em;
   vertical-align: middle;
   accent-color: var(--md-link);
+  cursor: pointer;
 }
 
 .markdown-body ul,

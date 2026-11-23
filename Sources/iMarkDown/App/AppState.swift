@@ -31,18 +31,32 @@ final class AppState: ObservableObject {
 
     @Published var session: DocumentSession = .untitled()
     @Published var stats: DocumentStats = .zero
-    @Published var mode: EditorMode = .split
+    @Published var mode: EditorMode {
+        didSet { defaults.set(mode.rawValue, forKey: Keys.mode) }
+    }
     @Published var saveStatus: SaveStatus = .idle
-    @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
+    @Published var sidebarVisibility: NavigationSplitViewVisibility {
+        didSet {
+            defaults.set(sidebarVisibility != .detailOnly, forKey: Keys.sidebarVisible)
+        }
+    }
     @Published var activeAlert: AppAlert?
     @Published var isEditorReady = false
     @Published var isExporting = false
     @Published var outline: [OutlineItem] = []
+    /// 当前阅读位置对应的标题序号（与 outline 一一对应），-1 表示尚未进入正文。
+    @Published var activeHeadingIndex = -1
+    /// 正文是否已进入顶部覆盖区：由 Web 侧按真实重叠关系上报。
+    @Published var chromeOverlapped = false
+    /// 文档大标题是否已移出顶部覆盖区：决定紧凑标题是否出现。
+    @Published var compactTitleVisible = false
     /// 外部修改选择「保留当前内容」后暂停自动保存，避免覆盖对方写入。
     @Published private(set) var isAutosaveSuspended = false
 
+    private let defaults: UserDefaults
     private var autosaveTask: Task<Void, Never>?
     private var draftTask: Task<Void, Never>?
+    private var outlineTask: Task<Void, Never>?
     private let drafts = DraftStore()
     private var didOfferDraftRecovery = false
     private var cancellables = Set<AnyCancellable>()
@@ -50,14 +64,25 @@ final class AppState: ObservableObject {
     private var externalCheckTask: Task<Void, Never>?
     private var isHandlingExternalChange = false
 
+    private enum Keys {
+        static let mode = "session.mode"
+        static let sidebarVisible = "session.sidebarVisible"
+        static let lastDocument = "session.lastDocument"
+    }
+
     init(
         settings: AppSettings? = nil,
         recents: RecentFilesStore? = nil,
-        workspace: WorkspaceStore? = nil
+        workspace: WorkspaceStore? = nil,
+        defaults: UserDefaults = .standard
     ) {
         self.settings = settings ?? AppSettings()
         self.recents = recents ?? RecentFilesStore()
         self.workspace = workspace ?? WorkspaceStore()
+        self.defaults = defaults
+        defaults.register(defaults: [Keys.sidebarVisible: true])
+        mode = EditorMode(rawValue: defaults.string(forKey: Keys.mode) ?? "") ?? .split
+        sidebarVisibility = defaults.bool(forKey: Keys.sidebarVisible) ? .all : .detailOnly
         bridge.onEvent = { [weak self] event in
             self?.handle(event)
         }
@@ -99,6 +124,10 @@ final class AppState: ObservableObject {
             // 必须先放行队列，否则编辑器就绪前排队的 setDocument / applyConfig 永远不会执行。
             editor.markReady()
             isEditorReady = true
+            // 页面重建后旧的顶部状态可能已失效，先归零等待 Web 重新上报。
+            chromeOverlapped = false
+            compactTitleVisible = false
+            activeHeadingIndex = -1
             pushEditorConfig()
             editor.setMode(mode)
             if !session.text.isEmpty || session.url != nil {
@@ -108,7 +137,7 @@ final class AppState: ObservableObject {
         case .change(let text, let stats):
             session.text = text
             self.stats = stats
-            outline = OutlineParser.parse(text)
+            scheduleOutlineParse(for: text)
             if session.url == nil {
                 saveStatus = session.text.isEmpty ? .idle : .unsaved
                 scheduleDraftSave()
@@ -119,6 +148,13 @@ final class AppState: ObservableObject {
 
         case .stats(let stats):
             self.stats = stats
+
+        case .chrome(let overlapped, let compactTitleVisible, let activeHeadingIndex):
+            chromeOverlapped = overlapped
+            self.compactTitleVisible = compactTitleVisible
+            if self.activeHeadingIndex != activeHeadingIndex {
+                self.activeHeadingIndex = activeHeadingIndex
+            }
 
         case .link(let href):
             openLink(href)
@@ -164,6 +200,13 @@ final class AppState: ObservableObject {
                 Task { @MainActor in self?.pushEditorConfig() }
             }
             .store(in: &cancellables)
+
+        // recents 是独立的 ObservableObject，转发变更让侧边栏与菜单立即刷新。
+        recents.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.objectWillChange.send() }
+            }
+            .store(in: &cancellables)
     }
 
     func applyAppearance() {
@@ -187,13 +230,16 @@ final class AppState: ObservableObject {
     func newDocument() {
         guard confirmDiscardIfNeeded() else { return }
         autosaveTask?.cancel()
+        outlineTask?.cancel()
         stopFileWatcher()
         discardDraft()
         isAutosaveSuspended = false
         session = .untitled()
         stats = .zero
         outline = []
+        activeHeadingIndex = -1
         saveStatus = .idle
+        defaults.removeObject(forKey: Keys.lastDocument)
         mode = .split
         editor.setMode(.split)
         editor.setDocument(text: "", baseDirectory: nil)
@@ -250,14 +296,17 @@ final class AppState: ObservableObject {
             }
 
             autosaveTask?.cancel()
+            outlineTask?.cancel()
             discardDraft()
             isAutosaveSuspended = false
             session = DocumentSession(url: standardized, text: text, savedText: text)
             session.loadedAt = .now
             stats = DocumentStats.from(text: text)
             outline = OutlineParser.parse(text)
+            activeHeadingIndex = -1
             saveStatus = .saved(.now)
             recents.record(standardized)
+            defaults.set(standardized.path, forKey: Keys.lastDocument)
             workspace.reveal(standardized)
             editor.setDocument(text: text, baseDirectory: session.baseDirectoryURL)
             editor.setMode(mode)
@@ -321,6 +370,7 @@ final class AppState: ObservableObject {
             isAutosaveSuspended = false
             discardDraft()
             recents.record(url)
+            defaults.set(url.path, forKey: Keys.lastDocument)
             pushEditorConfig()
             startFileWatcher(for: url)
             return true
@@ -346,6 +396,23 @@ final class AppState: ObservableObject {
                 self.saveStatus = .saved(.now)
             } catch {
                 self.saveStatus = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - 大纲
+
+    /// 大纲只服务侧边栏，没必要每个输入批次都全量解析；去抖后统一重算。
+    private func scheduleOutlineParse(for text: String) {
+        outlineTask?.cancel()
+        outlineTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let items = OutlineParser.parse(text)
+            guard !Task.isCancelled else { return }
+            self.outline = items
+            if self.activeHeadingIndex >= items.count {
+                self.activeHeadingIndex = items.isEmpty ? -1 : items.count - 1
             }
         }
     }
@@ -402,6 +469,43 @@ final class AppState: ObservableObject {
         draftTask?.cancel()
         draftTask = nil
         drafts.clear()
+    }
+
+    /// 启动时回到上次打开的文档；有未保存草稿或已通过命令行指定文件时不抢焦点。
+    func restoreLastSessionIfNeeded() {
+        guard session.url == nil, session.text.isEmpty else { return }
+        guard let path = defaults.string(forKey: Keys.lastDocument),
+              FileManager.default.fileExists(atPath: path) else { return }
+        open(url: URL(fileURLWithPath: path))
+    }
+
+    /// 当前文档在侧栏被重命名后，同步会话路径与相对图片基准目录。
+    func didRenameCurrentDocument(from oldURL: URL, to newURL: URL) {
+        guard session.url?.standardizedFileURL == oldURL.standardizedFileURL else { return }
+        session.url = newURL
+        stopFileWatcher()
+        startFileWatcher(for: newURL)
+        recents.record(newURL)
+        defaults.set(newURL.path, forKey: Keys.lastDocument)
+        // 只更新基准目录并重绘，避免 setDocument 重置光标与撤销历史。
+        pushEditorConfig()
+    }
+
+    /// 当前文档被移到废纸篓后，回到未命名状态，防止自动保存又把文件写回来。
+    func didRemoveCurrentDocument(_ url: URL) {
+        guard session.url?.standardizedFileURL == url.standardizedFileURL else { return }
+        autosaveTask?.cancel()
+        outlineTask?.cancel()
+        stopFileWatcher()
+        isAutosaveSuspended = false
+        discardDraft()
+        session = .untitled()
+        stats = .zero
+        outline = []
+        activeHeadingIndex = -1
+        saveStatus = .idle
+        defaults.removeObject(forKey: Keys.lastDocument)
+        editor.setDocument(text: "", baseDirectory: nil)
     }
 
     // MARK: - 图片插入
@@ -492,12 +596,14 @@ final class AppState: ObservableObject {
             present(title: "无法导出", message: "编辑器尚未就绪，请稍后重试。")
             return
         }
+        // PDF 固定用浅色与打印版式：页边距与分页由导出服务控制。
         let html = HTMLComposer.compose(
             articleHTML: article,
             title: session.displayName,
-            dark: isDark,
+            dark: false,
             previewTheme: settings.previewTheme,
-            documentURL: session.url
+            documentURL: session.url,
+            layout: .pdf
         )
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.pdf]

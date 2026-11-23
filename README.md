@@ -1,6 +1,6 @@
 # iMarkDown
 
-面向 macOS 26 的 Markdown 编辑器：原生 SwiftUI 外壳 + 官方 Liquid Glass 组件，内核使用 WKWebView 承载成熟的 Web 编辑器栈（CodeMirror + marked + highlight.js）。
+面向 macOS 26+ 的 Markdown 编辑器：原生 SwiftUI 外壳 + 官方 Liquid Glass 组件，内核使用 WKWebView 承载成熟的 Web 编辑器栈（CodeMirror + marked + highlight.js）。
 
 - 分栏实时预览，源码 / 分栏 / 预览三种模式
 - 左侧文件树：打开文件夹浏览 Markdown，支持单独打开文件或整个文件夹

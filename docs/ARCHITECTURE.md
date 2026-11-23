@@ -1,6 +1,6 @@
 # iMarkDown 架构设计
 
-> 一个 macOS 26 原生 Markdown 编辑器：外壳使用 SwiftUI + 官方 Liquid Glass 接口，编辑内核使用 WKWebView 承载成熟的 Web 技术栈。
+> 一个 macOS 26+ 原生 Markdown 编辑器：外壳使用 SwiftUI + 官方 Liquid Glass 接口，编辑内核使用 WKWebView 承载成熟的 Web 技术栈。
 > 文档版本：v0.1 · 2026-11-20
 
 ---
@@ -102,7 +102,7 @@
   → RecentFilesStore.record
   → WorkspaceStore.reveal（展开文件所在目录，文件树中高亮当前文档）
   → EditorController.setDocument(text, baseDirectory)   // Web 静默 setValue，不触发 change
-  → Web 返回 stats → 原生刷新字数与阅读时长
+  → Web 返回 stats → 原生刷新字数与行数
 ```
 
 `baseDirectory` 用于把 Markdown 中的相对图片路径解析为 `file://` 绝对路径；WKWebView 以根目录为读取范围加载本地资源。
@@ -123,7 +123,8 @@ CodeMirror change → 140ms 去抖 → postMessage('change', {text, stats})
 ### 4.3 导出
 
 - **HTML**：Web 返回预览区 `innerHTML` → 原生把 `github-markdown.css`、highlight 主题、`preview.css`、`export.css` 全部内联进模板 → 写出单文件 HTML，不依赖应用资源。
-- **PDF**：同一份 HTML 交给离屏 WKWebView → `NSPrintOperation`（`jobDisposition = .save`，A4、页边距、自动分页）→ 落盘 PDF。
+- **PDF**：同一份 HTML（固定浅色 + 打印版式）交给离屏 WKWebView → `createPDF` 按块级元素边界切片 → 逐页合成到 A4（48pt 页边距）→ 落盘 PDF。
+  - 不使用 `NSPrintOperation`：macOS 26 上 WebKit 打印链路存在页数计算缺陷（FB20581927），会无限生成页面并卡死导出。
 
 ---
 
@@ -135,7 +136,8 @@ Web → 原生（`window.webkit.messageHandlers.editor.postMessage`）：
 | --- | --- | --- |
 | `ready` | — | Web 初始化完成，原生开始冲刷排队命令 |
 | `change` | `text`, `stats` | 用户编辑（140ms 去抖），原生更新镜像与脏状态 |
-| `stats` | `characters`, `words`, `lines`, `readingMinutes` | 仅统计信息更新（打开/切换文档后），字段直接铺在消息根部 |
+| `stats` | `characters`, `words`, `lines` | 仅统计信息更新（打开/切换文档后），字段直接铺在消息根部 |
+| `chrome` | `overlapped`, `compactTitle` | 正文是否进入顶部覆盖区、大标题是否已移出，用于顶部材质与紧凑标题 |
 | `link` | `href` | 点击链接，原生负责打开浏览器或跳转 Markdown 文档 |
 | `save` | — | Web 内 ⌘S 转发到原生保存 |
 | `log` | `text` | 调试输出 |

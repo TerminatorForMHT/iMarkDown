@@ -14,9 +14,15 @@ extension Color {
 }
 
 enum DesignTokens {
-    static let cardRadius: CGFloat = 18
     static let hudRadius: CGFloat = 15
-    static let contentInset: CGFloat = 18
+    /// 顶部悬浮控件条带的高度，也是 Web 侧判定重叠的阈值。
+    static let topBarHeight: CGFloat = 64
+    /// 材质下缘的渐隐高度。
+    static let topBarFade: CGFloat = 16
+    static let topBarHorizontalInset: CGFloat = 22
+    static let controlHeight: CGFloat = 30
+    /// 隐藏标题栏后仍然存在的系统标题栏高度，用于补回拖拽 / 双击缩放。
+    static let titleBarHeight: CGFloat = 28
 }
 
 /// 官方 Liquid Glass 的 AppKit 入口。SwiftUI 浮层用 `.glassEffect`，
@@ -51,43 +57,5 @@ struct GlassSurface: NSViewRepresentable {
             glass.cornerRadius = cornerRadius
             glass.tintColor = tint
         }
-    }
-}
-
-/// 布局背景：用低饱和 MeshGradient 提供可被玻璃折射的内容。
-struct WorkspaceBackdrop: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    private let points: [SIMD2<Float>] = [
-        SIMD2(0, 0), SIMD2(0.5, 0), SIMD2(1, 0),
-        SIMD2(0, 0.55), SIMD2(0.55, 0.45), SIMD2(1, 0.55),
-        SIMD2(0, 1), SIMD2(0.5, 1), SIMD2(1, 1)
-    ]
-
-    var body: some View {
-        MeshGradient(width: 3, height: 3, points: points, colors: colors)
-            .overlay(
-                LinearGradient(
-                    colors: [.black.opacity(colorScheme == .dark ? 0.20 : 0.015), .clear],
-                    startPoint: .top,
-                    endPoint: .center
-                )
-            )
-            .ignoresSafeArea()
-    }
-
-    private var colors: [Color] {
-        if colorScheme == .dark {
-            return [
-                Color(hex: 0x0F1115), Color(hex: 0x121A26), Color(hex: 0x1A1524),
-                Color(hex: 0x0E1A1C), Color(hex: 0x101216), Color(hex: 0x141B27),
-                Color(hex: 0x1E1913), Color(hex: 0x12151B), Color(hex: 0x0F171C)
-            ]
-        }
-        return [
-            Color(hex: 0xEEF2F8), Color(hex: 0xE6EDFB), Color(hex: 0xF3EEF9),
-            Color(hex: 0xE9F3F2), Color(hex: 0xF7F8FB), Color(hex: 0xEAF1FD),
-            Color(hex: 0xF4EFE9), Color(hex: 0xEFF2F7), Color(hex: 0xE8F0F6)
-        ]
     }
 }

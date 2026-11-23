@@ -16,7 +16,6 @@
   var workspace = document.getElementById('workspace');
   var preview = document.getElementById('preview');
   var previewScroll = document.getElementById('preview-scroll');
-  var previewHint = document.getElementById('preview-hint');
   var placeholder = document.getElementById('source-placeholder');
   var lightSheet = document.getElementById('hljs-light');
   var darkSheet = document.getElementById('hljs-dark');
@@ -96,8 +95,8 @@
     if (text.length > HUGE_DOCUMENT) {
       preview.classList.add('is-plain');
       preview.textContent = text;
-      previewHint.textContent = '大文件纯文本预览';
       updatePlaceholder();
+      scheduleChrome();
       return;
     }
 
@@ -119,8 +118,48 @@
     rewriteImages();
     decorateHeadings();
     highlightCode(text.length <= HIGHLIGHT_LIMIT);
+    enableTaskCheckboxes();
     updatePlaceholder();
-    previewHint.textContent = state.mode === 'preview' ? '阅读模式' : '实时渲染';
+    scheduleChrome();
+  }
+
+  /// 预览里的任务清单保持可点击：点击后回写源码里的 `[ ]` / `[x]`。
+  /// marked 只输出 checkbox，不带 GitHub 的任务清单类名，这里补齐以命中样式。
+  function enableTaskCheckboxes() {
+    var boxes = preview.querySelectorAll('li input[type="checkbox"]');
+    for (var i = 0; i < boxes.length; i += 1) {
+      var box = boxes[i];
+      var item = box.closest ? box.closest('li') : null;
+      if (item) {
+        item.classList.add('task-list-item');
+        if (item.parentElement) {
+          item.parentElement.classList.add('contains-task-list');
+        }
+      }
+      box.removeAttribute('disabled');
+      box.setAttribute('data-task-index', String(i));
+      box.setAttribute('aria-label', '切换任务完成状态');
+    }
+  }
+
+  function toggleTaskCheckbox(box) {
+    var index = Number(box.getAttribute('data-task-index'));
+    if (isNaN(index)) { return; }
+
+    var text = cm.getValue();
+    var pattern = /^([ \t]*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\])/gm;
+    var match;
+    var current = 0;
+    while ((match = pattern.exec(text)) !== null) {
+      if (current === index) {
+        var offset = match.index + match[1].length;
+        var from = cm.posFromIndex(offset);
+        var to = cm.posFromIndex(offset + 1);
+        cm.replaceRange(match[2] === ' ' ? 'x' : ' ', from, to, '+task');
+        return;
+      }
+      current += 1;
+    }
   }
 
   function escapeHTML(value) {
@@ -202,7 +241,7 @@
 
   function computeStats(text) {
     if (!text) {
-      return { characters: 0, words: 0, lines: 0, readingMinutes: 0 };
+      return { characters: 0, words: 0, lines: 0 };
     }
     var characters = 0;
     var codePoints = Array.from(text);
@@ -215,8 +254,7 @@
     return {
       characters: characters,
       words: words,
-      lines: text.split('\n').length,
-      readingMinutes: words === 0 ? 0 : Math.max(1, Math.ceil(words / 300))
+      lines: text.split('\n').length
     };
   }
 
@@ -560,15 +598,131 @@
 
   cm.on('scroll', function () {
     syncScroll(cm.getScrollerElement(), previewScroll);
+    scheduleChrome();
   });
 
   previewScroll.addEventListener('scroll', function () {
     syncScroll(previewScroll, cm.getScrollerElement());
+    scheduleChrome();
   }, { passive: true });
+
+  // MARK: - 顶部覆盖区状态
+
+  // 与原生顶部条带同高（DesignTokens.topBarHeight）。判定的是正文是否真的
+  // 进入覆盖区，而不是 scrollTop > 0；正文顶部留白仍属于可滚动内容。
+  var CHROME_HEIGHT = 64;
+  var chromeQueued = false;
+  var chromeState = { overlapped: false, compact: false, activeHeading: -1, initialized: false };
+
+  function contentPaddingTop(el) {
+    if (!el) { return 0; }
+    var value = parseFloat(window.getComputedStyle(el).paddingTop);
+    return isNaN(value) ? 0 : value;
+  }
+
+  function sourceScroller() {
+    return cm.getScrollerElement();
+  }
+
+  function sourceLines() {
+    return cm.getWrapperElement().querySelector('.CodeMirror-lines');
+  }
+
+  function firstSourceLine() {
+    return cm.getWrapperElement().querySelector('.CodeMirror-line');
+  }
+
+  function computeChrome() {
+    var previewVisible = state.mode !== 'source';
+    var sourceVisible = state.mode !== 'preview';
+
+    var previewOverlap = false;
+    if (previewVisible) {
+      previewOverlap = previewScroll.scrollTop > contentPaddingTop(preview) - CHROME_HEIGHT;
+    }
+
+    var sourceOverlap = false;
+    if (sourceVisible) {
+      sourceOverlap = sourceScroller().scrollTop > contentPaddingTop(sourceLines()) - CHROME_HEIGHT;
+    }
+
+    var overlapped = previewOverlap || sourceOverlap;
+    var compact = false;
+
+    // 分栏优先看预览侧的大标题；预览为空时退回源码首行。
+    var titleElement = previewVisible ? preview.firstElementChild : null;
+    var lineElement = titleElement ? null : (sourceVisible ? firstSourceLine() : null);
+    if (titleElement) {
+      compact = titleElement.getBoundingClientRect().bottom < CHROME_HEIGHT;
+    } else if (lineElement) {
+      compact = lineElement.getBoundingClientRect().bottom < CHROME_HEIGHT;
+    } else {
+      compact = previewVisible ? previewOverlap : sourceOverlap;
+    }
+
+    return { overlapped: overlapped, compact: compact && overlapped };
+  }
+
+  /// 侧栏大纲高亮：取视野顶部最后一个越过覆盖区的标题序号。
+  function activeHeading() {
+    if (state.mode === 'source') { return -1; }
+    var headings = preview.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    if (!headings.length) { return -1; }
+    var threshold = previewScroll.getBoundingClientRect().top + CHROME_HEIGHT + 12;
+    var index = -1;
+    for (var i = 0; i < headings.length; i += 1) {
+      if (headings[i].getBoundingClientRect().top <= threshold) {
+        index = i;
+      } else {
+        break;
+      }
+    }
+    return index;
+  }
+
+  function updateChrome(force) {
+    var result = computeChrome();
+    var heading = activeHeading();
+    if (!force && chromeState.initialized &&
+        chromeState.overlapped === result.overlapped &&
+        chromeState.compact === result.compact &&
+        chromeState.activeHeading === heading) {
+      return;
+    }
+    chromeState.overlapped = result.overlapped;
+    chromeState.compact = result.compact;
+    chromeState.activeHeading = heading;
+    chromeState.initialized = true;
+    post('chrome', {
+      overlapped: result.overlapped,
+      compactTitle: result.compact,
+      activeHeading: heading
+    });
+  }
+
+  function scheduleChrome() {
+    if (chromeQueued) { return; }
+    chromeQueued = true;
+    requestAnimationFrame(function () {
+      chromeQueued = false;
+      updateChrome(false);
+    });
+  }
+
+  window.addEventListener('resize', scheduleChrome);
 
   // MARK: - 链接
 
   preview.addEventListener('click', function (event) {
+    var box = event.target.closest
+      ? event.target.closest('li.task-list-item input[type="checkbox"]')
+      : null;
+    if (box) {
+      event.preventDefault();
+      toggleTaskCheckbox(box);
+      return;
+    }
+
     var anchor = event.target.closest ? event.target.closest('a') : null;
     if (!anchor) { return; }
 
@@ -610,6 +764,8 @@
     render();
     if (findState.open) { refreshFind(); }
     cm.refresh();
+    // 新文档回到顶部：强制上报一次，清掉上一份文档留下的覆盖状态。
+    updateChrome(true);
     post('stats', computeStats(cm.getValue()));
   }
 
@@ -617,8 +773,11 @@
     if (mode !== 'source' && mode !== 'split' && mode !== 'preview') { return; }
     state.mode = mode;
     workspace.className = 'mode-' + mode;
-    previewHint.textContent = mode === 'preview' ? '阅读模式' : '实时渲染';
-    requestAnimationFrame(function () { cm.refresh(); });
+    requestAnimationFrame(function () {
+      cm.refresh();
+      // 模式切换改变了可见窗格，必须按真实位置重算一次顶部状态。
+      updateChrome(true);
+    });
   }
 
   function applyConfig(config) {
@@ -653,6 +812,7 @@
 
     cm.refresh();
     if (needsRender) { render(); }
+    scheduleChrome();
   }
 
   function wrap(before, after) {
@@ -712,6 +872,8 @@
     findNext: findNext,
     findPrevious: findPrevious,
     closeFind: closeFind,
+    undo: function () { cm.undo(); },
+    redo: function () { cm.redo(); },
     scrollToHeading: scrollToHeading,
     getText: function () { return cm.getValue(); },
     getArticleHTML: function () { return preview.innerHTML; }
@@ -720,6 +882,7 @@
   render();
   updatePlaceholder();
   cm.refresh();
+  updateChrome(true);
 
   // 就绪信号不依赖 requestAnimationFrame：窗口不可见或被系统节流时，
   // rAF 可能长时间不触发，导致原生侧一直拿不到编辑器。

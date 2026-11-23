@@ -34,14 +34,10 @@ struct MarkdownKitChecks {
         let stats = DocumentStats.from(text: "你好 world\nsecond line")
         runner.expect(stats.words == 5, "中日韩逐字 + 拉丁按词计数")
         runner.expect(stats.lines == 2, "行数统计")
-        runner.expect(stats.readingMinutes == 1, "阅读时长至少 1 分钟")
         runner.expect(
             stats.characters == "你好worldsecondline".count,
             "字符数不含空白"
         )
-
-        let long = String(repeating: "字", count: 601)
-        runner.expect(DocumentStats.from(text: long).readingMinutes == 3, "阅读时长向上取整")
     }
 
     // MARK: - OutlineParser
@@ -140,6 +136,18 @@ struct MarkdownKitChecks {
             "reveal 展开一级父目录"
         )
         runner.expect(store.isExpanded(nested), "reveal 展开二级父目录")
+
+        // 搜索：跨层级命中 Markdown 文件，忽略大小写与非 Markdown 文件。
+        runner.expect(
+            (await store.search("intro")).map(\.name) == ["intro.md"],
+            "搜索命中嵌套文件"
+        )
+        runner.expect(
+            (await store.search("INTRO")).map(\.name) == ["intro.md"],
+            "搜索不区分大小写"
+        )
+        runner.expect((await store.search("data")).isEmpty, "搜索忽略非 Markdown 文件")
+        runner.expect((await store.search("   ")).isEmpty, "空白查询返回空结果")
 
         // 文件夹历史：收起文件树后仍可从最近文件夹恢复。
         let second = try makeTemporaryDirectory(prefix: "Workspace2")

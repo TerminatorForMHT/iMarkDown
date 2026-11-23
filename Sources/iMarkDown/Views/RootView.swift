@@ -15,6 +15,7 @@ struct RootView: View {
             EditorWorkspaceView()
         }
         .navigationSplitViewStyle(.balanced)
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .frame(minWidth: 980, minHeight: 640)
         .onAppear {
             AppDelegate.shared?.appState = state
@@ -24,6 +25,9 @@ struct RootView: View {
             if let path = CommandLine.arguments.dropFirst().first,
                FileManager.default.fileExists(atPath: path) {
                 state.requestOpen(url: URL(fileURLWithPath: path))
+            } else {
+                // 命令行指定了文件时以它为准，否则回到上次编辑的文档。
+                state.restoreLastSessionIfNeeded()
             }
         }
         .onChange(of: state.mode) { _, newMode in

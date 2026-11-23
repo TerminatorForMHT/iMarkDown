@@ -4,12 +4,19 @@ import MarkdownKit
 /// 将预览 HTML 片段包装成可独立打开的完整文档。
 /// 样式全部内联，导出的 HTML 不依赖应用资源目录。
 enum HTMLComposer {
+    /// 导出用途：屏幕版式用于独立 HTML，PDF 版式去掉屏幕版心，由导出服务控制分页与页边距。
+    enum Layout {
+        case screen
+        case pdf
+    }
+
     static func compose(
         articleHTML: String,
         title: String,
         dark: Bool,
         previewTheme: PreviewTheme,
-        documentURL: URL?
+        documentURL: URL?,
+        layout: Layout = .screen
     ) -> String {
         var css = WebResources.text("vendor/github-markdown/github-markdown.css")
         css += "\n"
@@ -18,6 +25,10 @@ enum HTMLComposer {
         css += WebResources.text("css/preview.css")
         css += "\n"
         css += WebResources.text("css/export.css")
+        if layout == .pdf {
+            css += "\n"
+            css += pdfCSS
+        }
 
         var baseTag = ""
         if let documentURL {
@@ -49,6 +60,38 @@ enum HTMLComposer {
         </html>
         """
     }
+
+    // MARK: - PDF 版式
+
+    /// createPDF 按屏幕媒体渲染，不会应用 export.css 的 @media print，
+    /// 所以这里用普通规则补齐打印版式（白底、无屏幕版心与内边距）。
+    private static let pdfCSS = """
+    html,
+    body {
+      background: #ffffff;
+    }
+
+    .markdown-body {
+      max-width: none;
+      padding: 0;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    pre {
+      white-space: pre-wrap;
+    }
+
+    pre,
+    blockquote,
+    table,
+    figure {
+      break-inside: avoid;
+    }
+    """
 
     // MARK: - 本地图片内联
 

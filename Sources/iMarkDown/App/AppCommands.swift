@@ -27,6 +27,16 @@ struct AppCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
         }
 
+        // 编辑发生在 WKWebView 里，菜单撤销必须显式转发给 CodeMirror，
+        // 否则 ⌘Z 会落到 WebKit 的输入撤销上，丢字粒度和 history 都与编辑器不一致。
+        CommandGroup(replacing: .undoRedo) {
+            Button("撤销") { state.editor.undo() }
+                .keyboardShortcut("z", modifiers: .command)
+
+            Button("重做") { state.editor.redo() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+
         CommandGroup(replacing: .saveItem) {
             Button("保存") { state.save() }
                 .keyboardShortcut("s", modifiers: .command)

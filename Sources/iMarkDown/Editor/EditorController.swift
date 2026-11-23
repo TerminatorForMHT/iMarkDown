@@ -21,10 +21,12 @@ struct EditorConfig: Encodable {
 
 enum EditorError: LocalizedError {
     case notReady
+    case timedOut
 
     var errorDescription: String? {
         switch self {
         case .notReady: return "编辑器尚未就绪。"
+        case .timedOut: return "编辑器响应超时。"
         }
     }
 }
@@ -112,6 +114,15 @@ final class EditorController: ObservableObject {
         run("window.MD.scrollToHeading(\(index))")
     }
 
+    /// 撤销/重做交给 CodeMirror 自己的历史栈，避免落到 WebKit 的输入撤销上。
+    func undo() {
+        run("window.MD.undo()")
+    }
+
+    func redo() {
+        run("window.MD.redo()")
+    }
+
     func currentText() async throws -> String {
         try await evaluateString("window.MD.getText()")
     }
@@ -137,9 +148,43 @@ final class EditorController: ObservableObject {
         }
     }
 
-    private func evaluateString(_ script: String) async throws -> String {
+    /// Web 进程卡死时 evaluateJavaScript 可能长期不回调，这里做一次超时兜底，
+    /// 让保存/导出能降级到原生镜像文本而不是一直转圈。
+    private func evaluateString(_ script: String, timeout: Double = 3) async throws -> String {
         guard isReady, let webView else { throw EditorError.notReady }
-        let value = try await webView.evaluateJavaScript(script)
-        return value as? String ?? ""
+        let gate = ContinuationGate()
+        return try await withCheckedThrowingContinuation { continuation in
+            Task { @MainActor in
+                do {
+                    let value = try await webView.evaluateJavaScript(script)
+                    if gate.claim() {
+                        continuation.resume(returning: value as? String ?? "")
+                    }
+                } catch {
+                    if gate.claim() {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                if gate.claim() {
+                    continuation.resume(throwing: EditorError.timedOut)
+                }
+            }
+        }
+    }
+}
+
+/// 保证超时与正常回调只放行一次。
+private final class ContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }

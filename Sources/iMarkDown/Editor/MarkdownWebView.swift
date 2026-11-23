@@ -18,12 +18,11 @@ enum WebResources {
     }
 }
 
-/// 外层裁剪视图：承担圆角与 masksToBounds。
+/// 外层容器：负责布局就绪回调与承载远程图层。
 ///
-/// 绝不能把 `masksToBounds` / `cornerRadius` 直接设在承载 WKWebView 的
-/// 远程图层（remote layer）上——在部分 macOS 版本上这会导致 WebKit 内容
-/// 层不参与合成，出现「背景能画、正文/源码全部空白」的症状。改成由一个
-/// 普通 AppKit 图层做裁剪，WebView 在内部满尺寸绘制，即可正常合成。
+/// 编辑区不再有圆角卡片，所以这里不做裁剪；若将来需要圆角，也必须由这个
+/// 普通 AppKit 图层承担 `masksToBounds`，不能直接设在 WKWebView 的远程图层上
+/// ——部分 macOS 版本会因此出现「背景能画、正文全部空白」的合成问题。
 final class WebViewClippingView: NSView {
     /// 当视图已进入窗口且拿到非零尺寸时调用一次。
     var onLayoutReady: (() -> Void)?
@@ -108,8 +107,6 @@ struct MarkdownWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WebViewClippingView {
         let wrapper = WebViewClippingView()
         wrapper.wantsLayer = true
-        wrapper.layer?.cornerRadius = DesignTokens.cardRadius
-        wrapper.layer?.masksToBounds = true
 
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -141,8 +138,8 @@ struct MarkdownWebView: NSViewRepresentable {
         webView.allowsMagnification = false
         webView.underPageBackgroundColor = .clear
 
-        // 注意：此处不再给 webView.layer 设 cornerRadius / masksToBounds，
-        // 裁剪交给外层 wrapper，避免破坏远程图层合成。
+        // 注意：此处不要给 webView.layer 设 cornerRadius / masksToBounds，
+        // 需要裁剪时交给外层 wrapper，避免破坏远程图层合成。
 
         wrapper.addSubview(webView)
         context.coordinator.webView = webView

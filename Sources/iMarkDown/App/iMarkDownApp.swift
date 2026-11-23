@@ -12,6 +12,7 @@ struct iMarkDownApp: App {
                 .environmentObject(state)
                 .environmentObject(state.settings)
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1240, height: 820)
         .commands {
             AppCommands(state: state)

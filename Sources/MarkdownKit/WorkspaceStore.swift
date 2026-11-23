@@ -172,6 +172,25 @@ public final class WorkspaceStore: ObservableObject {
         }
     }
 
+    /// 在整个工作区内按文件名搜索（不区分大小写），最多返回 `limit` 个结果。
+    /// 目录树是懒加载的，搜索单独走一次后台遍历，避免为了搜索把整棵树读进内存。
+    public func search(_ rawQuery: String, limit: Int = 200) async -> [FileNode] {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, let rootURL else { return [] }
+
+        let ignored = Self.ignoredDirectories
+        let allowed = Self.markdownExtensions
+        return await Task.detached(priority: .userInitiated) {
+            Self.searchFiles(
+                in: rootURL,
+                query: query,
+                ignored: ignored,
+                extensions: allowed,
+                limit: limit
+            )
+        }.value
+    }
+
     /// 展开目标文件的各级父目录，让当前文档在树中可见。
     public func reveal(_ fileURL: URL) {
         guard let rootURL else { return }
@@ -225,6 +244,75 @@ public final class WorkspaceStore: ObservableObject {
         }
     }
 
+    // MARK: - 文件操作
+
+    public enum WorkspaceError: LocalizedError {
+        case invalidName
+        case failed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .invalidName: return "名称不能为空，也不能包含斜杠。"
+            case .failed(let message): return message
+            }
+        }
+    }
+
+    /// 重命名文件或文件夹，返回新路径。
+    @discardableResult
+    public func rename(_ node: FileNode, to rawName: String) throws -> URL {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/") else { throw WorkspaceError.invalidName }
+        let target = node.url
+            .deletingLastPathComponent()
+            .appendingPathComponent(name, isDirectory: node.isDirectory)
+        guard target != node.url else { return node.url }
+
+        do {
+            try FileManager.default.moveItem(at: node.url, to: target)
+        } catch {
+            throw WorkspaceError.failed(error.localizedDescription)
+        }
+        refreshChildren(of: node.url.deletingLastPathComponent())
+        return target
+    }
+
+    /// 在指定目录创建一个带标题的 Markdown 文件，并自动展开该目录。
+    @discardableResult
+    public func createMarkdownFile(in directory: URL, named rawName: String) throws -> URL {
+        var name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/") else { throw WorkspaceError.invalidName }
+        if URL(fileURLWithPath: name).pathExtension.isEmpty {
+            name += ".md"
+        }
+        let target = directory.appendingPathComponent(name)
+        guard !FileManager.default.fileExists(atPath: target.path) else {
+            throw WorkspaceError.failed("同名文件已存在。")
+        }
+
+        let title = target.deletingPathExtension().lastPathComponent
+        guard FileManager.default.createFile(
+            atPath: target.path,
+            contents: Data("# \(title)\n\n".utf8)
+        ) else {
+            throw WorkspaceError.failed("无法创建文件。")
+        }
+
+        expanded.insert(directory.standardizedFileURL)
+        refreshChildren(of: directory)
+        return target
+    }
+
+    /// 移到废纸篓，可撤销。
+    public func trash(_ node: FileNode) throws {
+        do {
+            try FileManager.default.trashItem(at: node.url, resultingItemURL: nil)
+        } catch {
+            throw WorkspaceError.failed(error.localizedDescription)
+        }
+        refreshChildren(of: node.url.deletingLastPathComponent())
+    }
+
     // MARK: - 目录监听
 
     private func watch(_ directory: URL) {
@@ -256,6 +344,43 @@ public final class WorkspaceStore: ObservableObject {
             source.cancel()
         }
         watchers.removeAll()
+    }
+
+    private nonisolated static func searchFiles(
+        in root: URL,
+        query: String,
+        ignored: Set<String>,
+        extensions: Set<String>,
+        limit: Int
+    ) -> [FileNode] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isHiddenKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var matches: [FileNode] = []
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: keys) else { continue }
+            if values.isDirectory == true {
+                if ignored.contains(url.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard extensions.contains(url.pathExtension.lowercased()) else { continue }
+            guard url.lastPathComponent.localizedStandardContains(query) else { continue }
+
+            matches.append(FileNode(url: url.standardizedFileURL, isDirectory: false))
+            if matches.count >= limit { break }
+        }
+
+        return matches.sorted { lhs, rhs in
+            lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
     }
 
     private nonisolated static func scan(

@@ -7,13 +7,11 @@ public struct DocumentStats: Codable, Equatable, Sendable {
     /// 字数：中日韩逐字计数 + 拉丁语系按词计数。
     public var words: Int
     public var lines: Int
-    public var readingMinutes: Int
 
-    public init(characters: Int = 0, words: Int = 0, lines: Int = 0, readingMinutes: Int = 0) {
+    public init(characters: Int = 0, words: Int = 0, lines: Int = 0) {
         self.characters = characters
         self.words = words
         self.lines = lines
-        self.readingMinutes = readingMinutes
     }
 
     public static let zero = DocumentStats()
@@ -24,8 +22,7 @@ public struct DocumentStats: Codable, Equatable, Sendable {
         return DocumentStats(
             characters: text.filter { !$0.isWhitespace }.count,
             words: words,
-            lines: lines,
-            readingMinutes: words == 0 ? 0 : max(1, Int(ceil(Double(words) / 300.0)))
+            lines: lines
         )
     }
 

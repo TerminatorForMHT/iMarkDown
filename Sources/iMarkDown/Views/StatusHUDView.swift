@@ -18,7 +18,6 @@ struct StatusHUDView: View {
                 .contentTransition(.numericText())
             Text("\(state.stats.lines) 行")
                 .contentTransition(.numericText())
-            Text("约 \(state.stats.readingMinutes) 分钟")
         }
         .font(.system(size: 11, design: .rounded))
         .foregroundStyle(.secondary)

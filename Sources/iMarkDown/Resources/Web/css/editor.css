@@ -6,9 +6,9 @@
   --fg-muted: #6e6e73;
   --fg-faint: #9a9aa0;
 
+  --editor-bg: #ffffff;
   --surface-top: #ffffff;
-  --surface-bottom: #f5f6f9;
-  --pane-tint: rgba(246, 247, 250, 0.55);
+  --field-bg: rgba(15, 23, 42, 0.045);
   --pane-divider: rgba(15, 23, 42, 0.075);
   --hairline: rgba(15, 23, 42, 0.06);
 
@@ -29,9 +29,9 @@ html[data-appearance="dark"] {
   --fg-muted: #a1a1aa;
   --fg-faint: #76767e;
 
+  --editor-bg: #1b1b1d;
   --surface-top: #1b1b1e;
-  --surface-bottom: #141416;
-  --pane-tint: rgba(24, 24, 27, 0.45);
+  --field-bg: rgba(255, 255, 255, 0.06);
   --pane-divider: rgba(255, 255, 255, 0.075);
   --hairline: rgba(255, 255, 255, 0.06);
 
@@ -64,15 +64,7 @@ body {
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
   -webkit-font-smoothing: antialiased;
-  background:
-    radial-gradient(120% 90% at 0% 0%, rgba(255, 255, 255, 0.55), transparent 58%),
-    linear-gradient(165deg, var(--surface-top) 0%, var(--surface-bottom) 100%);
-}
-
-html[data-appearance="dark"] body {
-  background:
-    radial-gradient(120% 90% at 10% 0%, rgba(255, 255, 255, 0.045), transparent 55%),
-    linear-gradient(165deg, var(--surface-top) 0%, var(--surface-bottom) 100%);
+  background: var(--editor-bg);
 }
 
 #workspace {
@@ -105,7 +97,7 @@ html[data-appearance="dark"] body {
 }
 
 .pane-source {
-  background: var(--pane-tint);
+  background: transparent;
 }
 
 .pane-preview {
@@ -117,34 +109,6 @@ html[data-appearance="dark"] body {
   width: 1px;
 }
 
-.pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  height: 33px;
-  flex: 0 0 33px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--hairline);
-  user-select: none;
-}
-
-.pane-label {
-  font-size: 9.5px;
-  font-weight: 650;
-  letter-spacing: 0.13em;
-  color: var(--fg-faint);
-  text-transform: uppercase;
-}
-
-.pane-hint {
-  font-size: 10px;
-  color: var(--fg-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .editor-host {
   position: relative;
   flex: 1 1 auto;
@@ -153,7 +117,7 @@ html[data-appearance="dark"] body {
 
 #source-placeholder {
   position: absolute;
-  top: 22px;
+  top: 114px;
   left: 25px;
   pointer-events: none;
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
@@ -175,7 +139,8 @@ html[data-appearance="dark"] body {
 }
 
 .CodeMirror-lines {
-  padding: 18px 20px 140px;
+  /* 顶部留白属于滚动内容：首行从原生悬浮控件下方开始，滚动时可进入控件后方。 */
+  padding: 112px 20px 140px;
 }
 
 .CodeMirror pre.CodeMirror-line,
@@ -284,14 +249,14 @@ html[data-appearance="dark"] body {
   word-break: break-word;
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
   font-size: var(--editor-font-size);
-  padding: 18px 20px 120px;
+  padding: 112px 20px 120px;
   color: var(--fg-muted);
 }
 
 /* 查找替换浮条 */
 .find-bar {
   position: fixed;
-  top: 44px;
+  top: 74px;
   right: 22px;
   z-index: 40;
   display: flex;
@@ -320,7 +285,7 @@ html[data-appearance="dark"] body {
   padding: 4px 7px;
   border-radius: 6px;
   border: 1px solid var(--hairline);
-  background: var(--pane-tint);
+  background: var(--field-bg);
   color: var(--fg);
   outline: none;
 }
@@ -340,7 +305,7 @@ html[data-appearance="dark"] body {
 }
 
 .find-bar button:hover {
-  background: var(--pane-tint);
+  background: var(--field-bg);
   color: var(--fg);
 }
 
@@ -380,7 +345,7 @@ html[data-appearance="dark"] .cm-find-current {
 #preview:empty::before {
   content: "预览将在这里实时呈现";
   display: block;
-  padding: 26px 38px;
+  padding: 112px 38px 26px;
   font-size: 13px;
   color: var(--fg-faint);
 }

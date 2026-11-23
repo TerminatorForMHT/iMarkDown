@@ -6,6 +6,7 @@ enum EditorEvent {
     case ready
     case change(text: String, stats: DocumentStats)
     case stats(DocumentStats)
+    case chrome(overlapped: Bool, compactTitleVisible: Bool, activeHeadingIndex: Int)
     case link(href: String)
     case saveRequested
     case imagePasted(data: Data, mime: String, filename: String)
@@ -34,6 +35,13 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         case "stats":
             // app.js 把统计字段直接铺在消息根部，而不是放在 stats 子对象里。
             onEvent?(.stats(Self.decodeStats(payload)))
+        case "chrome":
+            // 正文是否进入顶部覆盖区、文档大标题是否已移出。
+            onEvent?(.chrome(
+                overlapped: payload["overlapped"] as? Bool ?? false,
+                compactTitleVisible: payload["compactTitle"] as? Bool ?? false,
+                activeHeadingIndex: payload["activeHeading"] as? Int ?? -1
+            ))
         case "link":
             if let href = payload["href"] as? String {
                 onEvent?(.link(href: href))
@@ -85,8 +93,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         return DocumentStats(
             characters: intValue(dict["characters"]),
             words: intValue(dict["words"]),
-            lines: intValue(dict["lines"]),
-            readingMinutes: intValue(dict["readingMinutes"])
+            lines: intValue(dict["lines"])
         )
     }
 
