@@ -103,7 +103,7 @@ struct EditorWorkspaceView: View {
             .padding(.leading, compactTitleLeadingInset)
             .frame(height: DesignTokens.topBarHeight, alignment: .leading)
             .opacity(state.compactTitleVisible ? 1 : 0)
-            .offset(y: state.compactTitleVisible || reduceMotion ? 0 : 2)
+            .offset(y: DesignTokens.topBarRowOffset + (state.compactTitleVisible || reduceMotion ? 0 : 2))
             .animation(
                 reduceMotion ? nil : .easeOut(duration: 0.2),
                 value: state.compactTitleVisible
@@ -139,6 +139,7 @@ struct EditorWorkspaceView: View {
         }
         .frame(height: DesignTokens.topBarHeight)
         .padding(.trailing, DesignTokens.topBarHorizontalInset)
+        .offset(y: DesignTokens.topBarRowOffset)
     }
 
     private var exportButton: some View {
@@ -205,9 +206,12 @@ struct EditorWorkspaceView: View {
         colorScheme == .dark ? Color(hex: 0x212124) : Color(hex: 0xF7F7F8)
     }
 
-    /// 侧栏收起后，窗口左上角被红绿灯与侧栏开关占用，标题必须让开。
+    /// 侧栏收起后，窗口左上角依次是红绿灯和系统自带的侧栏开关（玻璃圆到 131pt），
+    /// 紧凑标题与开关之间还要留出 10pt 空隙。
     private var compactTitleLeadingInset: CGFloat {
-        state.sidebarVisibility == .detailOnly ? 76 : DesignTokens.topBarHorizontalInset
+        state.sidebarVisibility == .detailOnly
+            ? DesignTokens.collapsedTitleLeadingInset
+            : DesignTokens.topBarHorizontalInset
     }
 }
 

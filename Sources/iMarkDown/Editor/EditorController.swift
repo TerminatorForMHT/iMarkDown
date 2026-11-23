@@ -51,17 +51,20 @@ final class EditorController: ObservableObject {
     private var pendingScripts: [String] = []
 
     private(set) var isAttached = false
+    /// 当前文档代数，与 Web 侧 `state.epoch` 一一对应。
+    /// change 事件携带发送时的代数，原生只接受等于当前值的事件，
+    /// 避免切换文档后旧文档的 debounce 事件把内容写进新文档。
+    private(set) var documentEpoch = 0
 
     func attach(_ webView: WKWebView) {
         self.webView = webView
         isAttached = true
+        flushIfPossible()
     }
 
     func markReady() {
         isReady = true
-        let scripts = pendingScripts
-        pendingScripts.removeAll()
-        scripts.forEach(execute)
+        flushIfPossible()
     }
 
     func markUnready() {
@@ -71,7 +74,8 @@ final class EditorController: ObservableObject {
     }
 
     func setDocument(text: String, baseDirectory: String?) {
-        run("window.MD.setDocument(\(JS.encode(text)), \(JS.encode(baseDirectory ?? "")))")
+        documentEpoch += 1
+        run("window.MD.setDocument(\(JS.encode(text)), \(JS.encode(baseDirectory ?? "")), \(documentEpoch))")
     }
 
     func setMode(_ mode: EditorMode) {
@@ -137,6 +141,15 @@ final class EditorController: ObservableObject {
             return
         }
         execute(script)
+    }
+
+    /// 就绪与挂载可能以任意顺序发生，两者都满足后才重放队列，
+    /// 否则脚本会在 webView 还不存在时被静默丢弃。
+    private func flushIfPossible() {
+        guard isReady, webView != nil else { return }
+        let scripts = pendingScripts
+        pendingScripts.removeAll()
+        scripts.forEach(execute)
     }
 
     private func execute(_ script: String) {

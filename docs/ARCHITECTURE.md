@@ -135,7 +135,7 @@ Web → 原生（`window.webkit.messageHandlers.editor.postMessage`）：
 | type | 载荷 | 说明 |
 | --- | --- | --- |
 | `ready` | — | Web 初始化完成，原生开始冲刷排队命令 |
-| `change` | `text`, `stats` | 用户编辑（140ms 去抖），原生更新镜像与脏状态 |
+| `change` | `text`, `stats`, `epoch` | 用户编辑（140ms 去抖），原生校验 `epoch` 后更新镜像与脏状态 |
 | `stats` | `characters`, `words`, `lines` | 仅统计信息更新（打开/切换文档后），字段直接铺在消息根部 |
 | `chrome` | `overlapped`, `compactTitle` | 正文是否进入顶部覆盖区、大标题是否已移出，用于顶部材质与紧凑标题 |
 | `link` | `href` | 点击链接，原生负责打开浏览器或跳转 Markdown 文档 |
@@ -146,7 +146,7 @@ Web → 原生（`window.webkit.messageHandlers.editor.postMessage`）：
 
 | 方法 | 说明 |
 | --- | --- |
-| `MD.setDocument(text, baseDirectory)` | 静默替换全文、清空历史与滚动、重渲染 |
+| `MD.setDocument(text, baseDirectory, epoch)` | 静默替换全文、清空历史与滚动、重渲染；`epoch` 为新文档代数，旧代数的 `change` 会被原生丢弃 |
 | `MD.setMode('source' \| 'split' \| 'preview')` | 切换布局 |
 | `MD.applyConfig({appearance, previewTheme, editorFontSize, previewFontSize, baseDirectory})` | 主题与排版快照 |
 | `MD.wrap(before, after)` / `MD.insert(text)` | 格式化命令、插入内容 |

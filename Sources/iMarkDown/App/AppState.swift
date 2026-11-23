@@ -130,11 +130,14 @@ final class AppState: ObservableObject {
             activeHeadingIndex = -1
             pushEditorConfig()
             editor.setMode(mode)
-            if !session.text.isEmpty || session.url != nil {
-                editor.setDocument(text: session.text, baseDirectory: session.baseDirectoryURL)
-            }
+            // 页面每次重建都重新灌入当前文档：既恢复内容，也让 Web 侧代数与原生对齐，
+            // 否则空文档时 Web 代数停在 0，会把它后续的 change 全判成过期事件。
+            editor.setDocument(text: session.text, baseDirectory: session.baseDirectoryURL)
 
-        case .change(let text, let stats):
+        case .change(let text, let stats, let epoch):
+            // 切换文档时旧文档可能还有一次 debounce 中的 change 在路上，
+            // 代对齐后直接丢弃，避免旧内容覆盖新文档的文本镜像甚至写盘。
+            guard epoch == editor.documentEpoch else { return }
             session.text = text
             self.stats = stats
             scheduleOutlineParse(for: text)

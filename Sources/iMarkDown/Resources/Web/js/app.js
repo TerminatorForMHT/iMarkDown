@@ -31,7 +31,10 @@
     editorFontSize: 14,
     previewFontSize: 15.5,
     baseDirectory: '',
-    suppress: false
+    suppress: false,
+    // 文档代数：每次 setDocument 递增，change 事件带上代数，
+    // 原生侧据此丢弃切换文档后仍在队列里的旧文档事件。
+    epoch: 0
   };
 
   var cm = CodeMirror.fromTextArea(document.getElementById('source'), {
@@ -543,7 +546,7 @@
     if (changeTimer) { clearTimeout(changeTimer); }
     changeTimer = setTimeout(function () {
       var text = cm.getValue();
-      post('change', { text: text, stats: computeStats(text) });
+      post('change', { text: text, stats: computeStats(text), epoch: state.epoch });
     }, cm.getValue().length > LARGE_DOCUMENT ? 600 : 140);
   });
 
@@ -748,7 +751,10 @@
     if (darkSheet) { darkSheet.disabled = !isDark; }
   }
 
-  function setDocument(text, baseDirectory) {
+  function setDocument(text, baseDirectory, epoch) {
+    if (typeof epoch === 'number') { state.epoch = epoch; }
+    // 切换文档时丢弃上一份文档尚未上报的 change，避免旧内容写入新文档。
+    if (changeTimer) { clearTimeout(changeTimer); changeTimer = null; }
     state.suppress = true;
     clearFindMarks();
     findState.matches = [];

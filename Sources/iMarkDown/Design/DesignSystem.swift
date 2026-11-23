@@ -23,6 +23,10 @@ enum DesignTokens {
     static let controlHeight: CGFloat = 30
     /// 隐藏标题栏后仍然存在的系统标题栏高度，用于补回拖拽 / 双击缩放。
     static let titleBarHeight: CGFloat = 28
+    /// 侧栏收起时，紧凑标题要让开红绿灯与系统侧栏开关所占的宽度。
+    static let collapsedTitleLeadingInset: CGFloat = 142
+    /// 顶部控件行相对 64pt 条带的垂直偏移，让控件中心与标题栏红绿灯对齐（26pt）。
+    static let topBarRowOffset: CGFloat = -6
 }
 
 /// 官方 Liquid Glass 的 AppKit 入口。SwiftUI 浮层用 `.glassEffect`，

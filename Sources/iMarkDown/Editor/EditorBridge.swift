@@ -4,7 +4,7 @@ import WebKit
 
 enum EditorEvent {
     case ready
-    case change(text: String, stats: DocumentStats)
+    case change(text: String, stats: DocumentStats, epoch: Int)
     case stats(DocumentStats)
     case chrome(overlapped: Bool, compactTitleVisible: Bool, activeHeadingIndex: Int)
     case link(href: String)
@@ -31,7 +31,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             onEvent?(.ready)
         case "change":
             let text = payload["text"] as? String ?? ""
-            onEvent?(.change(text: text, stats: Self.decodeStats(payload["stats"])))
+            onEvent?(.change(
+                text: text,
+                stats: Self.decodeStats(payload["stats"]),
+                epoch: Self.intValue(payload["epoch"])
+            ))
         case "stats":
             // app.js 把统计字段直接铺在消息根部，而不是放在 stats 子对象里。
             onEvent?(.stats(Self.decodeStats(payload)))
