@@ -2,13 +2,28 @@
 
 面向 macOS 26+ 的 Markdown 编辑器：原生 SwiftUI 外壳 + 官方 Liquid Glass 组件，内核使用 WKWebView 承载成熟的 Web 编辑器栈（CodeMirror + marked + highlight.js）。
 
-- 分栏实时预览，源码 / 分栏 / 预览三种模式
-- 左侧文件树：打开文件夹浏览 Markdown，支持单独打开文件或整个文件夹
+![iMarkDown 分栏编辑界面](docs/images/split-view.png)
+
+- 分栏实时预览，源码 / 分栏 / 预览三种模式（⌘1 / ⌘2 / ⌘3）
+- 左侧文件树：打开文件夹浏览 Markdown，按文件名搜索整个工作区
+- 大纲导航：跟随滚动高亮当前章节，点击跳转
+- 预览中的任务清单可直接勾选，回写源码且支持撤销
+- 自动恢复上次的编辑模式、侧栏状态与打开的文档
 - 官方 Liquid Glass：`glassEffect`、`GlassEffectContainer`、`NSGlassEffectView`（macOS 26+，低版本自动降级）
 - 本地文件读写、最近文件、防抖自动保存、未保存提醒
 - 浅色 / 深色 / 跟随系统，github / serif / compact 三套预览主题
 - 导出 HTML / PDF（A4 自动分页），PDF 支持中文排版
 - 全部前端依赖已 vendored 到仓库，离线可用，无需 Node
+
+## 界面预览
+
+**预览模式**
+
+![预览模式](docs/images/preview-mode.png)
+
+**文件树搜索**
+
+![文件树搜索](docs/images/file-search.png)
 
 ## 环境要求
 
