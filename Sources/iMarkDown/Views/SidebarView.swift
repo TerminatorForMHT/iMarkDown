@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject private var state: AppState
+    @State private var collapsedHeadings: Set<Int> = []
 
     var body: some View {
         List {
@@ -16,13 +17,19 @@ struct SidebarView: View {
             recentSection
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .safeAreaInset(edge: .top) { brand }
         .safeAreaInset(edge: .bottom) {
-            GlassActionPair(onNew: state.newDocument, onOpen: state.openDocument)
+            GlassActionPair(onNew: { _ = state.newDocument() }, onOpen: { _ = state.openDocument() })
+                .disabled(state.isDocumentOperationInProgress)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
         }
+        .background { SidebarGlassBackground().ignoresSafeArea() }
         .navigationTitle("iMarkDown")
+        .onChange(of: state.outline) { old, new in
+            if old != new { collapsedHeadings.removeAll() }
+        }
     }
 
     private var outlineSection: some View {
@@ -32,32 +39,51 @@ struct SidebarView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             } else {
-                ForEach(Array(state.outline.enumerated()), id: \.element.id) { index, item in
-                    let isActive = index == state.activeHeadingIndex
-                    Button {
-                        state.jumpToOutline(item)
-                    } label: {
-                        HStack(spacing: 0) {
-                            Text(item.title)
-                                .font(.system(
-                                    size: item.level <= 2 ? 12 : 11.5,
-                                    weight: (isActive || item.level == 1) ? .semibold : .regular
-                                ))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Spacer(minLength: 0)
+                ForEach(OutlineItem.visibleItems(state.outline, collapsed: collapsedHeadings)) { item in
+                    let isActive = item.index == state.activeHeadingIndex
+                    let hasChildren = state.outline.indices.contains(item.index + 1) &&
+                        state.outline[item.index + 1].level > item.level
+                    HStack(spacing: 2) {
+                        if hasChildren {
+                            Button {
+                                if !collapsedHeadings.insert(item.index).inserted {
+                                    collapsedHeadings.remove(item.index)
+                                }
+                            } label: {
+                                Image(systemName: collapsedHeadings.contains(item.index) ? "chevron.right" : "chevron.down")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .frame(width: 14, height: 20)
+                            }
+                            .buttonStyle(.plain)
+                            .help(collapsedHeadings.contains(item.index) ? "展开章节" : "折叠章节")
+                            .accessibilityLabel("\(collapsedHeadings.contains(item.index) ? "展开" : "折叠")\(item.title)")
+                        } else {
+                            Color.clear.frame(width: 14, height: 20)
                         }
-                        .padding(.leading, CGFloat(max(0, item.level - 1)) * 10 + 6)
-                        .padding(.trailing, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(isActive ? Color.accentColor.opacity(0.14) : Color.clear)
-                        )
-                        .contentShape(Rectangle())
+                        Button {
+                            state.jumpToOutline(item)
+                        } label: {
+                            HStack(spacing: 0) {
+                                Text(item.title)
+                                    .font(.system(
+                                        size: item.level <= 2 ? 12 : 11.5,
+                                        weight: (isActive || item.level == 1) ? .semibold : .regular
+                                    ))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(item.title)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.leading, CGFloat(max(0, item.level - 1)) * 10 + 6)
+                    .padding(.trailing, 6)
+                    .padding(.vertical, 4)
+                    .glassRow(isSelected: isActive)
                     .foregroundStyle(isActive ? Color.primary : Color.secondary)
+                    .listRowBackground(Color.clear)
                 }
             }
         } header: {
@@ -77,6 +103,9 @@ struct SidebarView: View {
                         RecentRow(entry: entry, isCurrent: state.session.url?.path == entry.path)
                     }
                     .buttonStyle(.plain)
+                    .padding(.horizontal, 6)
+                    .glassRow(isSelected: state.session.url?.path == entry.path)
+                    .listRowBackground(Color.clear)
                     .disabled(!entry.exists)
                     .contextMenu {
                         Button("在 Finder 中显示") {
@@ -105,13 +134,17 @@ struct SidebarView: View {
                     }
                     .disabled(state.recents.items.isEmpty)
                 } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 11))
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
+                        .frame(width: 12, height: 12)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .fixedSize()
+                .glassIconControl()
+                .frame(width: DesignTokens.sidebarIconSize, height: DesignTokens.sidebarIconSize)
+                .help("管理最近文件")
+                .accessibilityLabel("管理最近文件")
             }
         }
     }
@@ -147,9 +180,12 @@ struct SidebarView: View {
                 Image(systemName: "gearshape")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
             }
-            .buttonStyle(.plain)
+            .glassIconControl()
+            .frame(width: DesignTokens.controlHeight, height: DesignTokens.controlHeight)
             .help("设置")
+            .accessibilityLabel("设置")
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -221,6 +257,8 @@ private struct FileTreeSection: View {
     @State private var results: [FileNode] = []
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
+    @FocusState private var isSearchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Section {
@@ -242,10 +280,13 @@ private struct FileTreeSection: View {
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 4)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .glassRow()
+                .listRowBackground(Color.clear)
             }
         } header: {
             header
@@ -272,6 +313,8 @@ private struct FileTreeSection: View {
             TextField("搜索文件", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11.5))
+                .focused($isSearchFocused)
+                .accessibilityLabel("搜索工作区文件")
                 .onChange(of: query) { _, _ in scheduleSearch() }
 
             if !query.isEmpty {
@@ -286,13 +329,17 @@ private struct FileTreeSection: View {
                 .help("清除搜索")
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .glassChrome(.inset, in: RoundedRectangle(cornerRadius: DesignTokens.searchRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignTokens.searchRadius, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(isSearchFocused ? 0.65 : 0), lineWidth: 1.2)
+                .allowsHitTesting(false)
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSearchFocused)
         .padding(.vertical, 2)
+        .listRowBackground(Color.clear)
     }
 
     @ViewBuilder
@@ -373,6 +420,7 @@ private struct FileTreeSection: View {
             Text(workspace.rootURL?.lastPathComponent ?? "文件")
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(workspace.rootURL?.path ?? "文件")
             Spacer(minLength: 4)
 
             // 未打开文件夹时由列表内的空状态提供入口，避免两个「打开文件夹」重复出现。
@@ -398,10 +446,13 @@ private struct FileTreeSection: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 10, weight: .semibold))
+                .frame(width: 12, height: 12)
         }
-        .buttonStyle(.plain)
+        .glassIconControl()
+        .frame(width: DesignTokens.sidebarIconSize, height: DesignTokens.sidebarIconSize)
         .foregroundStyle(.secondary)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -419,6 +470,9 @@ private struct FolderHistorySection: View {
                         FolderHistoryRow(folder: folder)
                     }
                     .buttonStyle(.plain)
+                    .padding(.horizontal, 6)
+                    .glassRow()
+                    .listRowBackground(Color.clear)
                     .disabled(!folder.exists)
                     .contextMenu {
                         Button("在 Finder 中显示") {
@@ -445,13 +499,17 @@ private struct FolderHistorySection: View {
                             workspace.clearRecentFolders()
                         }
                     } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 11))
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
+                            .frame(width: 12, height: 12)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
-                    .fixedSize()
+                    .glassIconControl()
+                    .frame(width: DesignTokens.sidebarIconSize, height: DesignTokens.sidebarIconSize)
+                    .help("管理最近文件夹")
+                    .accessibilityLabel("管理最近文件夹")
                 }
             }
         }
@@ -559,10 +617,13 @@ private struct FileTreeRow: View {
                             .frame(width: 5, height: 5)
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .glassRow(isSelected: isCurrent)
+            .listRowBackground(Color.clear)
             .contextMenu {
                 Button("打开") { state.requestOpen(url: node.url) }
                 Button("在 Finder 中显示") {
@@ -570,7 +631,9 @@ private struct FileTreeRow: View {
                 }
                 Divider()
                 Button("重命名…") { rename() }
+                    .disabled(state.isDocumentOperationInProgress)
                 Button("移到废纸篓…", role: .destructive) { moveToTrash() }
+                    .disabled(state.isDocumentOperationInProgress)
             }
         }
     }
@@ -578,6 +641,7 @@ private struct FileTreeRow: View {
     // MARK: - 文件操作
 
     private func rename() {
+        guard !state.isDocumentOperationInProgress else { return }
         guard let name = promptForName(
             title: "重命名",
             message: node.isDirectory ? "重命名文件夹不会移动其中的文件。" : "重命名当前文件。",
@@ -609,6 +673,7 @@ private struct FileTreeRow: View {
     }
 
     private func moveToTrash() {
+        guard !state.isDocumentOperationInProgress else { return }
         let alert = NSAlert()
         alert.messageText = "移到废纸篓？"
         alert.informativeText = node.name
@@ -666,19 +731,17 @@ struct GlassActionPair: View {
     let onOpen: () -> Void
 
     var body: some View {
-        if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 8) {
-                    newButton.buttonStyle(.glassProminent)
-                    openButton.buttonStyle(.glass)
-                }
-            }
-        } else {
+        GlassEffectContainer(spacing: 4) {
             HStack(spacing: 8) {
-                newButton.buttonStyle(.borderedProminent)
-                openButton.buttonStyle(.bordered)
+                newButton.buttonStyle(.glassProminent)
+                openButton.buttonStyle(.glass(.clear))
             }
+            .padding(6)
+            .glassChrome(.regular,
+                         in: RoundedRectangle(cornerRadius: DesignTokens.dockRadius, style: .continuous),
+                         elevated: true)
         }
+        .font(.system(size: 12, weight: .medium))
     }
 
     private var newButton: some View {
@@ -686,7 +749,8 @@ struct GlassActionPair: View {
             Label("新建", systemImage: "square.and.pencil")
                 .frame(maxWidth: .infinity)
         }
-        .controlSize(.large)
+        .controlSize(.regular)
+        .buttonBorderShape(.capsule)
     }
 
     private var openButton: some View {
@@ -694,6 +758,7 @@ struct GlassActionPair: View {
             Label("打开文件", systemImage: "doc.text")
                 .frame(maxWidth: .infinity)
         }
-        .controlSize(.large)
+        .controlSize(.regular)
+        .buttonBorderShape(.capsule)
     }
 }

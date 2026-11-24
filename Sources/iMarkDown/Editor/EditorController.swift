@@ -22,11 +22,15 @@ struct EditorConfig: Encodable {
 enum EditorError: LocalizedError {
     case notReady
     case timedOut
+    case documentChanged
+    case invalidResponse
 
     var errorDescription: String? {
         switch self {
         case .notReady: return "编辑器尚未就绪。"
         case .timedOut: return "编辑器响应超时。"
+        case .documentChanged: return "文档已切换，本次操作已取消。"
+        case .invalidResponse: return "编辑器返回了无效数据，未执行保存。"
         }
     }
 }
@@ -46,11 +50,13 @@ enum JS {
 /// 未就绪时先入队，避免文档加载与配置推送的时序竞争。
 @MainActor
 final class EditorController: ObservableObject {
+    let resources = EditorResourceHandler()
     private weak var webView: WKWebView?
     private var isReady = false
     private var pendingScripts: [String] = []
 
     private(set) var isAttached = false
+    var hostingWindow: NSWindow? { webView?.window }
     /// 当前文档代数，与 Web 侧 `state.epoch` 一一对应。
     /// change 事件携带发送时的代数，原生只接受等于当前值的事件，
     /// 避免切换文档后旧文档的 debounce 事件把内容写进新文档。
@@ -75,6 +81,7 @@ final class EditorController: ObservableObject {
 
     func setDocument(text: String, baseDirectory: String?) {
         documentEpoch += 1
+        resources.documentDirectory = baseDirectory.flatMap(URL.init(string:))
         run("window.MD.setDocument(\(JS.encode(text)), \(JS.encode(baseDirectory ?? "")), \(documentEpoch))")
     }
 
@@ -83,6 +90,7 @@ final class EditorController: ObservableObject {
     }
 
     func apply(_ config: EditorConfig) {
+        resources.documentDirectory = URL(string: config.baseDirectory)
         run("window.MD.applyConfig(\(config.jsonString))")
     }
 
@@ -127,12 +135,29 @@ final class EditorController: ObservableObject {
         run("window.MD.redo()")
     }
 
+    func setReadOnly(_ readOnly: Bool) {
+        run("window.MD.setReadOnly(\(readOnly))")
+    }
+
     func currentText() async throws -> String {
-        try await evaluateString("window.MD.getText()")
+        let epoch = documentEpoch
+        let json = try await evaluateString("window.MD.getSnapshot()")
+        struct Snapshot: Decodable { let text: String; let epoch: Int }
+        guard let data = json.data(using: .utf8),
+              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else {
+            throw EditorError.invalidResponse
+        }
+        guard snapshot.epoch == epoch, documentEpoch == epoch else {
+            throw EditorError.documentChanged
+        }
+        return snapshot.text
     }
 
     func articleHTML() async throws -> String {
-        try await evaluateString("window.MD.getArticleHTML()")
+        let epoch = documentEpoch
+        let html = try await evaluateString("window.MD.getArticleHTML(\(epoch))", timeout: 15)
+        guard documentEpoch == epoch else { throw EditorError.documentChanged }
+        return html
     }
 
     private func run(_ script: String) {
@@ -171,7 +196,11 @@ final class EditorController: ObservableObject {
                 do {
                     let value = try await webView.evaluateJavaScript(script)
                     if gate.claim() {
-                        continuation.resume(returning: value as? String ?? "")
+                        if let string = value as? String {
+                            continuation.resume(returning: string)
+                        } else {
+                            continuation.resume(throwing: EditorError.invalidResponse)
+                        }
                     }
                 } catch {
                     if gate.claim() {

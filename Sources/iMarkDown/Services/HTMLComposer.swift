@@ -46,6 +46,7 @@ enum HTMLComposer {
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https: http:; base-uri file:; form-action 'none'">
         <title>\(escape(title))</title>
         \(baseTag)
         <style>
@@ -119,16 +120,13 @@ enum HTMLComposer {
                   !src.hasPrefix("https://"),
                   !src.hasPrefix("data:") else { continue }
 
-            let fileURL: URL?
-            if src.hasPrefix("file://") {
-                fileURL = URL(string: src)
-            } else {
-                fileURL = URL(string: src, relativeTo: directory)?.standardizedFileURL
-            }
-            guard let fileURL, fileURL.isFileURL,
+            let decoded = src.replacingOccurrences(of: "&amp;", with: "&")
+            guard let fileURL = FileService.localImageURL(decoded, directory: directory),
+                  let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size <= imageSizeLimit,
+                  let mime = mimeType(for: fileURL.pathExtension),
                   let data = try? Data(contentsOf: fileURL),
-                  data.count <= imageSizeLimit,
-                  let mime = mimeType(for: fileURL.pathExtension) else { continue }
+                  data.count <= imageSizeLimit else { continue }
 
             let dataURI = "data:\(mime);base64,\(data.base64EncodedString())"
             guard let range = Range(match.range(at: 2), in: result) else { continue }

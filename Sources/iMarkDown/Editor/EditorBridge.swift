@@ -4,12 +4,16 @@ import WebKit
 
 enum EditorEvent {
     case ready
+    case unready
+    case edited(epoch: Int)
+    case outline([OutlineItem], epoch: Int)
+    case reading(Bool, epoch: Int)
     case change(text: String, stats: DocumentStats, epoch: Int)
-    case stats(DocumentStats)
-    case chrome(overlapped: Bool, compactTitleVisible: Bool, activeHeadingIndex: Int)
+    case stats(DocumentStats, epoch: Int)
+    case chrome(overlapped: Bool, compactTitleVisible: Bool, activeHeadingIndex: Int, epoch: Int)
     case link(href: String)
     case saveRequested
-    case imagePasted(data: Data, mime: String, filename: String)
+    case imagePasted(data: Data, mime: String, filename: String, epoch: Int)
     case log(String)
 }
 
@@ -21,6 +25,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "editor",
+              message.frameInfo.isMainFrame,
+              message.frameInfo.request.url == EditorResourceHandler.editorURL,
               let payload = message.body as? [String: Any],
               let type = payload["type"] as? String else {
             return
@@ -29,6 +35,19 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         switch type {
         case "ready":
             onEvent?(.ready)
+        case "edited":
+            onEvent?(.edited(epoch: Self.intValue(payload["epoch"])))
+        case "outline":
+            guard let rows = payload["headings"] as? [[String: Any]] else { return }
+            let items = rows.enumerated().compactMap { index, row -> OutlineItem? in
+                guard let title = row["title"] as? String else { return nil }
+                let level = Self.intValue(row["level"])
+                guard (1...6).contains(level) else { return nil }
+                return OutlineItem(index: index, level: level, title: title, line: -1)
+            }
+            onEvent?(.outline(items, epoch: Self.intValue(payload["epoch"])))
+        case "reading":
+            onEvent?(.reading(payload["active"] as? Bool ?? false, epoch: Self.intValue(payload["epoch"])))
         case "change":
             let text = payload["text"] as? String ?? ""
             onEvent?(.change(
@@ -38,13 +57,14 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             ))
         case "stats":
             // app.js 把统计字段直接铺在消息根部，而不是放在 stats 子对象里。
-            onEvent?(.stats(Self.decodeStats(payload)))
+            onEvent?(.stats(Self.decodeStats(payload), epoch: Self.intValue(payload["epoch"])))
         case "chrome":
             // 正文是否进入顶部覆盖区、文档大标题是否已移出。
             onEvent?(.chrome(
                 overlapped: payload["overlapped"] as? Bool ?? false,
                 compactTitleVisible: payload["compactTitle"] as? Bool ?? false,
-                activeHeadingIndex: payload["activeHeading"] as? Int ?? -1
+                activeHeadingIndex: payload["activeHeading"] as? Int ?? -1,
+                epoch: Self.intValue(payload["epoch"])
             ))
         case "link":
             if let href = payload["href"] as? String {
@@ -55,13 +75,15 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         case "image":
             // 图片以 base64 传输，原生侧解码后落盘到文档同级 assets 目录。
             guard let base64 = payload["data"] as? String,
+                  base64.utf8.count <= 12 * 1024 * 1024,
                   let data = Data(base64Encoded: base64) else {
                 break
             }
             onEvent?(.imagePasted(
                 data: data,
                 mime: payload["mime"] as? String ?? "",
-                filename: payload["name"] as? String ?? ""
+                filename: payload["name"] as? String ?? "",
+                epoch: Self.intValue(payload["epoch"])
             ))
         case "log":
             if let text = payload["text"] as? String {
@@ -74,6 +96,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     /// 内容进程被系统回收（内存压力）或崩溃：通知外壳重建编辑器，避免永久白屏。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        onEvent?(.unready)
         onWebProcessTerminated?()
     }
 
@@ -89,7 +112,10 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             decisionHandler(.cancel)
             return
         }
-        decisionHandler(.allow)
+        let isEditor = navigationAction.request.url == EditorResourceHandler.editorURL
+        let isMain = navigationAction.targetFrame?.isMainFrame == true
+        let isLoad = navigationAction.navigationType == .other || navigationAction.navigationType == .reload
+        decisionHandler(isEditor && isMain && isLoad ? .allow : .cancel)
     }
 
     private static func decodeStats(_ value: Any?) -> DocumentStats {

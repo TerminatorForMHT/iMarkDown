@@ -4,15 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src imarkdown: https: http: data:; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; connect-src 'none'">
   <title>iMarkDown Editor</title>
-  <script>
-    // 首帧消除闪烁：WebKit 会给出系统外观，原生配置随后覆盖。
-    (function () {
-      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.documentElement.dataset.appearance = 'dark';
-      }
-    })();
-  </script>
+  <!-- 外观由 app.js 与原生配置设置；不允许 Markdown 执行内联脚本。 -->
 
   <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
   <link rel="stylesheet" href="vendor/codemirror/addon/simplescrollbars.min.css">
@@ -40,9 +34,12 @@
     </section>
   </div>
 
+  <!-- 与滚动正文在同一个 WebKit 合成树内；不属于文档或导出内容。 -->
+  <div id="chrome-backdrop" aria-hidden="true" hidden></div>
+
   <div id="find-bar" class="find-bar" hidden>
     <div class="find-row">
-      <input id="find-input" type="text" placeholder="查找" autocomplete="off" spellcheck="false">
+      <input id="find-input" aria-label="查找文本" type="text" placeholder="查找" autocomplete="off" spellcheck="false">
       <span id="find-count" class="find-count">0/0</span>
       <button type="button" data-find="case" title="区分大小写">Aa</button>
       <button type="button" data-find="regex" title="正则表达式">.*</button>
@@ -51,7 +48,7 @@
       <button type="button" data-find="close" title="关闭 (Esc)">✕</button>
     </div>
     <div class="find-row">
-      <input id="replace-input" type="text" placeholder="替换为" autocomplete="off" spellcheck="false">
+      <input id="replace-input" aria-label="替换文本" type="text" placeholder="替换为" autocomplete="off" spellcheck="false">
       <button type="button" data-find="replace">替换</button>
       <button type="button" data-find="replace-all">全部替换</button>
     </div>

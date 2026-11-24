@@ -71,6 +71,11 @@ struct MarkdownKitChecks {
 
         let lineNumber = OutlineParser.parse("intro\n\n## 第二章").first?.line
         runner.expect(lineNumber == 2, "记录标题所在行号")
+
+        let nested = OutlineParser.parse("# 一\n## 子\n#### 深层\n## 同级\n# 二")
+        runner.expect(OutlineItem.visibleItems(nested, collapsed: [0]).map(\.index) == [0, 4], "折叠章节隐藏所有后代")
+        runner.expect(OutlineItem.visibleItems(nested, collapsed: [1]).map(\.index) == [0, 1, 3, 4], "跳级标题也属于后代")
+        runner.expect(OutlineItem.visibleItems(nested, collapsed: []).count == nested.count, "展开后恢复完整大纲")
     }
 
     // MARK: - FileService
@@ -93,6 +98,38 @@ struct MarkdownKitChecks {
         let emptyURL = directory.appendingPathComponent("empty.md")
         try Data().write(to: emptyURL)
         runner.expect(try FileService.read(from: emptyURL).isEmpty, "空文件读取为空字符串")
+
+        try FileService.write("新内容", to: url, expectedText: text)
+        runner.expect(try FileService.read(from: url) == "新内容", "磁盘版本匹配时允许保存")
+        do {
+            try FileService.write("错误覆盖", to: url, expectedText: text)
+            runner.expect(false, "拒绝覆盖外部版本")
+        } catch FileServiceError.externallyModified {
+            runner.expect(try FileService.read(from: url) == "新内容", "冲突不会更改磁盘")
+        }
+        do {
+            try FileService.write("错误重建", to: directory.appendingPathComponent("missing.md"), expectedText: text)
+            runner.expect(false, "被删除文件不可自动重建")
+        } catch FileServiceError.externallyModified {
+            runner.expect(true, "被删除文件不可自动重建")
+        }
+
+        let image = directory.appendingPathComponent("图片 空格.png")
+        try Data([1, 2, 3]).write(to: image)
+        runner.expect(FileService.localImageURL("图片%20空格.png", directory: directory) == image.resolvingSymlinksInPath(), "相对图片支持中文与空格")
+        runner.expect(FileService.localImageURL(image.absoluteString, directory: directory) != nil, "授权目录内绝对图片可读取")
+        runner.expect(FileService.localImageURL("../outside.png", directory: directory) == nil, "拒绝路径越界")
+        runner.expect(FileService.localImageURL("https://example.com/a.png", directory: directory) == nil, "本地通道拒绝远程地址")
+        runner.expect(FileService.localImageURL("sample.md", directory: directory) == nil, "本地图片通道拒绝文本")
+        let link = directory.appendingPathComponent("escape.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: directory.deletingLastPathComponent().appendingPathComponent("outside.png"))
+        runner.expect(FileService.localImageURL("escape.png", directory: directory) == nil, "拒绝失效符号链接")
+        let imageDirectory = directory.appendingPathComponent("images", isDirectory: true)
+        try FileManager.default.createDirectory(at: imageDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: imageDirectory.appendingPathComponent("escape.png"), withDestinationURL: image)
+        runner.expect(FileService.localImageURL("escape.png", directory: imageDirectory) == nil, "拒绝越界符号链接")
+        try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("safe.png"), withDestinationURL: image)
+        runner.expect(FileService.localImageURL("safe.png", directory: directory) == image.resolvingSymlinksInPath(), "允许目录内符号链接图片")
     }
 
     // MARK: - WorkspaceStore

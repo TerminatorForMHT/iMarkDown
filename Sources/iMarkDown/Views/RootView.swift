@@ -21,6 +21,7 @@ struct RootView: View {
             AppDelegate.shared?.appState = state
             state.applyAppearance()
             state.pushEditorConfig()
+            #if !IMARKDOWN_UI_CHECK
             state.offerDraftRecoveryIfNeeded()
             if let path = CommandLine.arguments.dropFirst().first,
                FileManager.default.fileExists(atPath: path) {
@@ -29,6 +30,7 @@ struct RootView: View {
                 // 命令行指定了文件时以它为准，否则回到上次编辑的文档。
                 state.restoreLastSessionIfNeeded()
             }
+            #endif
         }
         .onChange(of: state.mode) { _, newMode in
             state.editor.setMode(newMode)

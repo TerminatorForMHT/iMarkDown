@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StatusHUDView: View {
     @EnvironmentObject private var state: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 9) {
@@ -15,28 +16,31 @@ struct StatusHUDView: View {
             separator
 
             Text("\(state.stats.words) 字")
-                .contentTransition(.numericText())
+                .monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText())
             Text("\(state.stats.lines) 行")
-                .contentTransition(.numericText())
+                .monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText())
         }
         .font(.system(size: 11, design: .rounded))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
         .padding(.horizontal, 14)
-        .frame(height: 30)
-        .background(
-            GlassSurface(
-                cornerRadius: DesignTokens.hudRadius,
-                tint: NSColor.controlAccentColor.withAlphaComponent(0.05)
-            )
-        )
-        .overlay(
-            Capsule()
-                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.16), radius: 12, y: 6)
+        .frame(height: DesignTokens.controlHeight)
+        .glassChrome(.regular, in: Capsule(), elevated: true)
         .allowsHitTesting(false)
+        .opacity(shouldFade ? 0 : 1)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: shouldFade)
         .accessibilityElement(children: .combine)
+        .accessibilityHidden(shouldFade)
         .accessibilityLabel("\(state.saveLabel)，\(state.stats.words) 字，\(state.stats.lines) 行")
+    }
+
+    private var shouldFade: Bool {
+        guard state.isReading else { return false }
+        switch state.saveStatus {
+        case .saved, .idle: return true
+        case .failed, .unsaved, .saving: return false
+        }
     }
 
     private var separator: some View {

@@ -10,6 +10,16 @@ public struct OutlineItem: Identifiable, Hashable, Sendable {
 
     public var id: Int { index }
 
+    /// 折叠只隐藏更深层级；遇到同级或更高层级后恢复，不依赖标题连续编号。
+    public static func visibleItems(_ items: [OutlineItem], collapsed: Set<Int>) -> [OutlineItem] {
+        var hiddenBelow: Int?
+        return items.filter { item in
+            if let level = hiddenBelow, item.level > level { return false }
+            hiddenBelow = collapsed.contains(item.index) ? item.level : nil
+            return true
+        }
+    }
+
     public init(index: Int, level: Int, title: String, line: Int) {
         self.index = index
         self.level = level

@@ -16,6 +16,7 @@
   var workspace = document.getElementById('workspace');
   var preview = document.getElementById('preview');
   var previewScroll = document.getElementById('preview-scroll');
+  var chromeBackdrop = document.getElementById('chrome-backdrop');
   var placeholder = document.getElementById('source-placeholder');
   var lightSheet = document.getElementById('hljs-light');
   var darkSheet = document.getElementById('hljs-dark');
@@ -32,6 +33,7 @@
     previewFontSize: 15.5,
     baseDirectory: '',
     suppress: false,
+    readOnly: false,
     // 文档代数：每次 setDocument 递增，change 事件带上代数，
     // 原生侧据此丢弃切换文档后仍在队列里的旧文档事件。
     epoch: 0
@@ -71,6 +73,30 @@
   // 再大则只做纯文本预览，Markdown 解析与代码高亮全部跳过。
   var HUGE_DOCUMENT = 600000;
   var HIGHLIGHT_LIMIT = 250000;
+  var headingNodes = [];
+  var outlineSignature = '';
+  var metrics = { renderMs: 0, characters: 0, headings: 0 };
+
+  function sanitizedHTML(text) {
+    if (!window.marked || !window.DOMPurify) { return '<pre>' + escapeHTML(text) + '</pre>'; }
+    return DOMPurify.sanitize(marked.parse(text || ''), {
+      FORBID_TAGS: ['form', 'iframe', 'object', 'embed', 'base', 'meta', 'link', 'style', 'button', 'textarea', 'select'],
+      FORBID_ATTR: ['srcset', 'action', 'formaction', 'autofocus']
+    });
+  }
+
+  function publishOutline() {
+    headingNodes = Array.from(preview.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+    var headings = headingNodes.map(function (node) {
+      return { level: Number(node.tagName.slice(1)), title: node.textContent.trim() };
+    });
+    var signature = JSON.stringify(headings);
+    if (signature !== outlineSignature) {
+      outlineSignature = signature;
+      post('outline', { headings: headings, epoch: state.epoch });
+    }
+    metrics.headings = headings.length;
+  }
 
   function scheduleRender() {
     var length = cm.getValue().length;
@@ -93,11 +119,15 @@
   }
 
   function render() {
+    var started = performance.now();
     var text = cm.getValue();
+    metrics.characters = text.length;
 
     if (text.length > HUGE_DOCUMENT) {
       preview.classList.add('is-plain');
       preview.textContent = text;
+      publishOutline();
+      metrics.renderMs = performance.now() - started;
       updatePlaceholder();
       scheduleChrome();
       return;
@@ -107,29 +137,27 @@
     var html = '';
 
     try {
-      html = window.marked ? marked.parse(text || '') : '';
+      html = sanitizedHTML(text);
     } catch (error) {
       html = '<p>' + escapeHTML(String(error)) + '</p>';
     }
 
-    if (window.DOMPurify) {
-      preview.innerHTML = DOMPurify.sanitize(html);
-    } else {
-      preview.textContent = text;
-    }
+    preview.innerHTML = html;
 
     rewriteImages();
     decorateHeadings();
     highlightCode(text.length <= HIGHLIGHT_LIMIT);
-    enableTaskCheckboxes();
+    enableTaskCheckboxes(preview, true);
+    publishOutline();
+    metrics.renderMs = performance.now() - started;
     updatePlaceholder();
     scheduleChrome();
   }
 
   /// 预览里的任务清单保持可点击：点击后回写源码里的 `[ ]` / `[x]`。
   /// marked 只输出 checkbox，不带 GitHub 的任务清单类名，这里补齐以命中样式。
-  function enableTaskCheckboxes() {
-    var boxes = preview.querySelectorAll('li input[type="checkbox"]');
+  function enableTaskCheckboxes(container, interactive) {
+    var boxes = container.querySelectorAll('li input[type="checkbox"]');
     for (var i = 0; i < boxes.length; i += 1) {
       var box = boxes[i];
       var item = box.closest ? box.closest('li') : null;
@@ -139,13 +167,15 @@
           item.parentElement.classList.add('contains-task-list');
         }
       }
-      box.removeAttribute('disabled');
+      if (interactive) { box.removeAttribute('disabled'); }
+      else { box.setAttribute('disabled', ''); }
       box.setAttribute('data-task-index', String(i));
       box.setAttribute('aria-label', '切换任务完成状态');
     }
   }
 
   function toggleTaskCheckbox(box) {
+    if (state.readOnly) { return; }
     var index = Number(box.getAttribute('data-task-index'));
     if (isNaN(index)) { return; }
 
@@ -184,9 +214,9 @@
     return slug || 'section';
   }
 
-  function decorateHeadings() {
-    var headings = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
-    var used = {};
+  function decorateHeadings(container) {
+    var headings = (container || preview).querySelectorAll('h1,h2,h3,h4,h5,h6');
+    var used = Object.create(null);
     for (var i = 0; i < headings.length; i += 1) {
       var node = headings[i];
       if (node.id) {
@@ -205,9 +235,9 @@
     }
   }
 
-  function highlightCode(enabled) {
+  function highlightCode(enabled, container) {
     if (!window.hljs || enabled === false) { return; }
-    var blocks = preview.querySelectorAll('pre code');
+    var blocks = (container || preview).querySelectorAll('pre code');
     for (var i = 0; i < blocks.length; i += 1) {
       blocks[i].removeAttribute('data-highlighted');
       try {
@@ -218,19 +248,27 @@
     }
   }
 
-  function rewriteImages() {
-    if (!state.baseDirectory) { return; }
+  function rewriteImages(container, exporting) {
+    var images = (container || preview).querySelectorAll('img');
     var base = state.baseDirectory;
-    if (base.charAt(base.length - 1) !== '/') { base += '/'; }
-
-    var images = preview.querySelectorAll('img');
+    if (base && base.charAt(base.length - 1) !== '/') { base += '/'; }
     for (var i = 0; i < images.length; i += 1) {
       var src = images[i].getAttribute('src') || '';
-      if (!src || /^(https?:|data:|blob:|file:)/i.test(src)) { continue; }
+      if (!src || /^(https?:|data:)/i.test(src)) { continue; }
       try {
-        images[i].src = new URL(src, base).href;
+        if (!base) { images[i].removeAttribute('src'); continue; }
+        var resolved = new URL(src, base);
+        var directory = new URL(base);
+        if (resolved.protocol !== 'file:' || resolved.host !== directory.host ||
+            resolved.pathname.indexOf(directory.pathname) !== 0) {
+          images[i].removeAttribute('src');
+          continue;
+        }
+        images[i].src = exporting ? resolved.href :
+          'imarkdown://document/' + resolved.pathname.slice(directory.pathname.length);
       } catch (error) {
         /* 保留原始 src */
+        images[i].removeAttribute('src');
       }
     }
   }
@@ -336,7 +374,6 @@
           continue;
         }
         matches.push({ start: result.index, end: result.index + result[0].length });
-        if (matches.length > 5000) { break; }
       }
       return matches;
     }
@@ -347,7 +384,6 @@
     while (index !== -1) {
       matches.push({ start: index, end: index + needle.length });
       index = haystack.indexOf(needle, index + needle.length);
-      if (matches.length > 5000) { break; }
     }
     return matches;
   }
@@ -442,6 +478,7 @@
   }
 
   function replaceCurrent() {
+    if (state.readOnly) { return; }
     var query = findInput ? findInput.value : '';
     if (!query) { return; }
     refreshFind();
@@ -467,6 +504,7 @@
   }
 
   function replaceAll() {
+    if (state.readOnly) { return; }
     var query = findInput ? findInput.value : '';
     if (!query) { return; }
     refreshFind();
@@ -475,15 +513,16 @@
 
     var replacement = replaceInput ? replaceInput.value : '';
     // 从后往前替换，保证前面的偏移量不失效，同时保留撤销历史。
-    cm.operation(function () {
-      for (var i = matches.length - 1; i >= 0; i -= 1) {
-        cm.replaceRange(
-          replacement,
-          cm.posFromIndex(matches[i].start),
-          cm.posFromIndex(matches[i].end)
-        );
-      }
-    });
+    // 拼成一次编辑，避免大量匹配逐条回调和重复扫描；撤销仍是一个步骤。
+    var text = cm.getValue();
+    var parts = [];
+    var offset = 0;
+    for (var i = 0; i < matches.length; i += 1) {
+      parts.push(text.slice(offset, matches[i].start), replacement);
+      offset = matches[i].end;
+    }
+    parts.push(text.slice(offset));
+    cm.replaceRange(parts.join(''), { line: 0, ch: 0 }, cm.posFromIndex(text.length), '+replaceAll');
     refreshFind();
   }
 
@@ -539,6 +578,7 @@
 
   cm.on('change', function () {
     if (state.suppress) { return; }
+    post('edited', { epoch: state.epoch });
     scheduleRender();
     updatePlaceholder();
     if (findState.open) { refreshFind(); }
@@ -555,6 +595,8 @@
 
   // 粘贴图片：读成 base64 交给原生保存到文档同级 assets/，再插入相对路径。
   function readImageFile(file) {
+    if (state.readOnly || file.size > 8 * 1024 * 1024) { return; }
+    var epoch = state.epoch;
     var reader = new FileReader();
     reader.onload = function () {
       var result = String(reader.result || '');
@@ -563,7 +605,8 @@
       post('image', {
         data: result.slice(comma + 1),
         mime: file.type || 'image/png',
-        name: file.name || ''
+        name: file.name || '',
+        epoch: epoch
       });
     };
     reader.readAsDataURL(file);
@@ -587,6 +630,28 @@
   cm.getWrapperElement().addEventListener('paste', handleImagePaste, false);
 
   var syncingScroll = false;
+  var readingActive = false;
+  var readingTimer = null;
+
+  function hasReadingSelection() {
+    var selection = window.getSelection();
+    return Boolean(selection && preview.contains(selection.anchorNode) && String(selection)) ||
+      (state.mode !== 'preview' && cm.somethingSelected());
+  }
+
+  function setReading(active, force) {
+    if (!force && active === readingActive) { return; }
+    readingActive = active;
+    post('reading', { active: active, epoch: state.epoch });
+  }
+
+  function noteReading() {
+    setReading(true);
+    if (readingTimer) { clearTimeout(readingTimer); }
+    readingTimer = setTimeout(function () { setReading(hasReadingSelection()); }, 1500);
+  }
+
+  document.addEventListener('selectionchange', function () { setReading(hasReadingSelection()); });
 
   function syncScroll(sourceEl, targetEl) {
     if (state.mode !== 'split' || syncingScroll) { return; }
@@ -600,11 +665,13 @@
   }
 
   cm.on('scroll', function () {
+    noteReading();
     syncScroll(cm.getScrollerElement(), previewScroll);
     scheduleChrome();
   });
 
   previewScroll.addEventListener('scroll', function () {
+    noteReading();
     syncScroll(previewScroll, cm.getScrollerElement());
     scheduleChrome();
   }, { passive: true });
@@ -669,22 +736,22 @@
   /// 侧栏大纲高亮：取视野顶部最后一个越过覆盖区的标题序号。
   function activeHeading() {
     if (state.mode === 'source') { return -1; }
-    var headings = preview.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    if (!headings.length) { return -1; }
     var threshold = previewScroll.getBoundingClientRect().top + CHROME_HEIGHT + 12;
-    var index = -1;
-    for (var i = 0; i < headings.length; i += 1) {
-      if (headings[i].getBoundingClientRect().top <= threshold) {
-        index = i;
-      } else {
-        break;
-      }
+    // 保留实时几何位置以适应图片加载；二分查找避免逐帧扫描全部标题。
+    var low = 0;
+    var high = headingNodes.length;
+    while (low < high) {
+      var middle = Math.floor((low + high) / 2);
+      if (headingNodes[middle].getBoundingClientRect().top <= threshold) { low = middle + 1; }
+      else { high = middle; }
     }
-    return index;
+    return low - 1;
   }
 
   function updateChrome(force) {
     var result = computeChrome();
+    // 在 WebKit 自己的合成树内即时更新，不等待原生桥接往返。
+    chromeBackdrop.hidden = !result.overlapped;
     var heading = activeHeading();
     if (!force && chromeState.initialized &&
         chromeState.overlapped === result.overlapped &&
@@ -699,7 +766,8 @@
     post('chrome', {
       overlapped: result.overlapped,
       compactTitle: result.compact,
-      activeHeading: heading
+      activeHeading: heading,
+      epoch: state.epoch
     });
   }
 
@@ -753,6 +821,10 @@
 
   function setDocument(text, baseDirectory, epoch) {
     if (typeof epoch === 'number') { state.epoch = epoch; }
+    outlineSignature = '';
+    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+    if (readingTimer) { clearTimeout(readingTimer); readingTimer = null; }
+    setReading(false, true);
     // 切换文档时丢弃上一份文档尚未上报的 change，避免旧内容写入新文档。
     if (changeTimer) { clearTimeout(changeTimer); changeTimer = null; }
     state.suppress = true;
@@ -772,7 +844,7 @@
     cm.refresh();
     // 新文档回到顶部：强制上报一次，清掉上一份文档留下的覆盖状态。
     updateChrome(true);
-    post('stats', computeStats(cm.getValue()));
+    post('stats', Object.assign(computeStats(cm.getValue()), { epoch: state.epoch }));
   }
 
   function setMode(mode) {
@@ -822,6 +894,7 @@
   }
 
   function wrap(before, after) {
+    if (state.readOnly) { return; }
     var selection = cm.getSelection();
     var cursor = cm.getCursor();
     cm.replaceSelection(before + selection + after);
@@ -832,12 +905,14 @@
   }
 
   function insert(text) {
+    if (state.readOnly) { return; }
     cm.replaceSelection(text);
     cm.focus();
   }
 
   /// 图片按块插入：行首/行尾/行中分别补换行，避免和相邻标题或正文粘连。
   function insertImage(path) {
+    if (state.readOnly) { return; }
     var cursor = cm.getCursor();
     var line = cm.getLine(cursor.line) || '';
     var before = '';
@@ -860,8 +935,7 @@
 
   /// 大纲跳转：按标题在预览中的出现顺序定位，避免依赖标题 id。
   function scrollToHeading(index) {
-    var headings = preview.querySelectorAll('h1,h2,h3,h4,h5,h6');
-    var target = headings[index];
+    var target = headingNodes[index];
     if (!target) { return; }
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -878,11 +952,24 @@
     findNext: findNext,
     findPrevious: findPrevious,
     closeFind: closeFind,
-    undo: function () { cm.undo(); },
-    redo: function () { cm.redo(); },
+    undo: function () { if (!state.readOnly) { cm.undo(); } },
+    redo: function () { if (!state.readOnly) { cm.redo(); } },
     scrollToHeading: scrollToHeading,
     getText: function () { return cm.getValue(); },
-    getArticleHTML: function () { return preview.innerHTML; }
+    getSnapshot: function () { return JSON.stringify({ text: cm.getValue(), epoch: state.epoch }); },
+    setReadOnly: function (value) { state.readOnly = Boolean(value); cm.setOption('readOnly', state.readOnly); },
+    getMetrics: function () { return Object.assign({}, metrics); },
+    getArticleHTML: function (epoch) {
+      if (epoch !== state.epoch) { throw new Error('文档已切换'); }
+      var text = cm.getValue();
+      var article = document.createElement('article');
+      article.innerHTML = sanitizedHTML(text);
+      rewriteImages(article, true);
+      decorateHeadings(article);
+      highlightCode(text.length <= HIGHLIGHT_LIMIT, article);
+      enableTaskCheckboxes(article, false);
+      return article.innerHTML;
+    }
   };
 
   render();

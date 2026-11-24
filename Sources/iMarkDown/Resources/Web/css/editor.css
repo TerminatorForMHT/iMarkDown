@@ -253,6 +253,36 @@ body {
   color: var(--fg-muted);
 }
 
+/* 顶部背景只模糊后方内容，文字和系统工具栏控件仍由原生层清晰绘制。
+   背景节点必须是 workspace 的兄弟节点，不能放进 article 或滚动容器。 */
+#chrome-backdrop {
+  position: fixed;
+  inset: 0 0 auto;
+  height: 64px;
+  z-index: 30;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.18);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+  /* 模糊采样层不叠加 mask，避免 WebKit 将采样树隔离。 */
+}
+
+#chrome-backdrop[hidden] {
+  display: none;
+}
+
+html[data-appearance="dark"] #chrome-backdrop {
+  background: rgba(27, 27, 30, 0.24);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  #chrome-backdrop {
+    background: var(--surface-top) !important;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
 /* 查找替换浮条 */
 .find-bar {
   position: fixed;
