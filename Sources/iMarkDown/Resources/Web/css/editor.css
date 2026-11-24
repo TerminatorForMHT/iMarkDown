@@ -1,6 +1,9 @@
 :root {
   --editor-font-size: 14px;
   --preview-font-size: 15.5px;
+  /* 页面初始化兜底；原生 DesignTokens.CornerRadius 通过配置推送实际值。 */
+  --ui-control-radius: 9999px;
+  --ui-surface-radius: 12px;
 
   --fg: #1c1c1e;
   --fg-muted: #6e6e73;
@@ -293,7 +296,7 @@ html[data-appearance="dark"] #chrome-backdrop {
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-  border-radius: 10px;
+  border-radius: var(--ui-surface-radius);
   background: var(--surface-top);
   border: 1px solid var(--hairline);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
@@ -311,9 +314,10 @@ html[data-appearance="dark"] #chrome-backdrop {
 
 .find-bar input {
   width: 156px;
+  min-height: 26px;
   font-size: 12px;
-  padding: 4px 7px;
-  border-radius: 6px;
+  padding: 4px 10px;
+  border-radius: var(--ui-control-radius);
   border: 1px solid var(--hairline);
   background: var(--field-bg);
   color: var(--fg);
@@ -325,9 +329,11 @@ html[data-appearance="dark"] #chrome-backdrop {
 }
 
 .find-bar button {
+  min-width: 26px;
+  min-height: 26px;
   font-size: 11px;
-  padding: 3px 7px;
-  border-radius: 6px;
+  padding: 3px 10px;
+  border-radius: var(--ui-control-radius);
   border: 1px solid var(--hairline);
   background: transparent;
   color: var(--fg-muted);
@@ -337,6 +343,11 @@ html[data-appearance="dark"] #chrome-backdrop {
 .find-bar button:hover {
   background: var(--field-bg);
   color: var(--fg);
+}
+
+.find-bar button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .find-bar button.is-on {

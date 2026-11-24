@@ -122,6 +122,7 @@ struct MarkdownWebView: NSViewRepresentable {
                             if ProcessInfo.processInfo.environment["IMARKDOWN_SETTINGS_CHECKS"] == "1" {
                                 try await SettingsWindowChecks.run(outputDirectory: output)
                             }
+                            try await HeaderBackdropChecks.checkCornerRadii(in: webView)
                             try HeaderBackdropChecks.captureModeControl(in: webView, outputDirectory: output)
                             if ProcessInfo.processInfo.environment["IMARKDOWN_UI_LAYOUT_ONLY"] == "1" {
                                 print("UI_LAYOUT_CHECK_PASSED：原生导出按钮与实际图标右侧居中对齐")
@@ -220,6 +221,110 @@ enum HeaderBackdropChecks {
     static func require(_ condition: Bool, _ text: String) throws {
         guard condition else { throw failure(text) }
         print("✓ \(text)")
+    }
+
+    static func checkCornerRadii(in view: WKWebView) async throws {
+        try require(DesignTokens.CornerRadius.icon == 8 && DesignTokens.CornerRadius.surface == 12 &&
+                    DesignTokens.CornerRadius.container == 18 &&
+                    GlassSurface().cornerRadius == DesignTokens.CornerRadius.surface,
+                    "品牌图标与大容器保留 8/12/18 pt，通用玻璃浮层不强行胶囊化")
+        for height: CGFloat in [28, 38, 30, 42] {
+            let rect = CGRect(x: 0, y: 0, width: 220, height: height)
+            let shape = DesignTokens.controlShape
+            let path = shape.path(in: rect)
+            let inset = shape.inset(by: 1.2).path(in: rect)
+            try require(path.contains(CGPoint(x: 0.5, y: rect.midY)) &&
+                        !path.contains(CGPoint(x: 0.5, y: height / 4)) &&
+                        !path.contains(CGPoint(x: 1, y: 1)) &&
+                        !inset.contains(CGPoint(x: 0.5, y: rect.midY)) &&
+                        inset.contains(CGPoint(x: 1.5, y: rect.midY)),
+                        "\(Int(height)) pt 控件：共用胶囊路径，背景与内描边随高度一致变化")
+        }
+        let config = EditorConfig(appearance: "light", previewTheme: "github", editorFontSize: 14,
+                                  previewFontSize: 15.5, baseDirectory: "")
+        struct RadiusPayload: Decodable { let uiCornerRadii: [String: Double] }
+        let payload = try JSONDecoder().decode(RadiusPayload.self, from: Data(config.jsonString.utf8))
+        try require(payload.uiCornerRadii == DesignTokens.CornerRadius.webConfig,
+                    "编辑器配置将原生圆角规格完整编码给 Web 控件")
+        // DOM 的 activeElement 不代表 WebView 已激活；焦点样式需要真实的键盘焦点。
+        NSApp.activate(ignoringOtherApps: true)
+        view.window?.makeKeyAndOrderFront(nil)
+        let acceptedFocus = view.window?.makeFirstResponder(view) ?? false
+        try await Task.sleep(nanoseconds: 200_000_000)
+        print("焦点宿主：应用激活=\(NSApp.isActive)，主窗口激活=\(view.window?.isKeyWindow == true)，接收焦点=\(acceptedFocus)")
+        let result = try await view.callAsyncJavaScript("""
+            return (async () => {
+              const root = document.documentElement, bar = document.getElementById('find-bar');
+              const settled = () => new Promise(resolve => setTimeout(resolve, 50));
+              const expected = (\(config.jsonString)).uiCornerRadii;
+              const appearance = root.dataset.appearance, wasOpen = !bar.hidden, focus = document.activeElement;
+              const inlineMatches = ['control', 'surface'].every(name =>
+                parseFloat(root.style.getPropertyValue('--ui-' + name + '-radius')) === expected[name]);
+              const matches = (node, radius) => {
+                const style = getComputedStyle(node);
+                return ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius']
+                  .every(key => parseFloat(style[key]) === radius);
+              };
+              try {
+                window.MD.openFind();
+                const opened = !bar.hidden && document.activeElement === document.getElementById('find-input');
+                const controls = Array.from(bar.querySelectorAll('input, button'));
+                const samples = [];
+                for (const value of ['light', 'dark']) {
+                  window.MD.applyConfig({ appearance: value });
+                  await settled();
+                  const capsules = controls.length > 0 && controls.every(node => {
+                    const rect = node.getBoundingClientRect();
+                    return matches(node, expected.control) && rect.height >= 26 &&
+                      expected.control >= Math.min(rect.width, rect.height) / 2;
+                  });
+                  const focusDetails = [];
+                  for (const node of controls.filter(node => node.tagName === 'INPUT')) {
+                    node.blur();
+                    await settled();
+                    const border = getComputedStyle(node).borderTopColor;
+                    node.focus();
+                    await settled();
+                    const focusedBorder = getComputedStyle(node).borderTopColor;
+                    focusDetails.push({ id: node.id, border, focusedBorder, active: document.activeElement === node,
+                      focused: node.matches(':focus'), documentFocused: document.hasFocus(),
+                      matches: matches(node, expected.control) && focusedBorder !== border });
+                  }
+                  samples.push({ appearance: value, matches: matches(bar, expected.surface) && capsules,
+                    focused: focusDetails.length === 2 && focusDetails.every(item => item.active && item.matches),
+                    focusDetails: JSON.stringify(focusDetails) });
+                }
+                window.MD.closeFind();
+                return JSON.stringify({ inlineMatches, samples, opened, closed: bar.hidden });
+              } finally {
+                window.MD.applyConfig({ appearance });
+                if (wasOpen) { window.MD.openFind(); } else { window.MD.closeFind(); }
+                if (focus && typeof focus.focus === 'function') { focus.focus(); }
+              }
+            })()
+            """, arguments: [:], in: nil, contentWorld: .page)
+        struct RadiusResult: Decodable {
+            struct Sample: Decodable {
+                let appearance: String
+                let matches: Bool
+                let focused: Bool
+                let focusDetails: String
+            }
+            let inlineMatches: Bool
+            let samples: [Sample]
+            let opened: Bool
+            let closed: Bool
+        }
+        guard let json = result as? String else { throw failure("Web 圆角验收未返回有效结果") }
+        let check = try JSONDecoder().decode(RadiusResult.self, from: Data(json.utf8))
+        try require(check.inlineMatches, "Web 使用实际收到的原生圆角配置，不仅依赖 CSS 兜底值")
+        try require(check.samples.map(\.appearance) == ["light", "dark"], "圆角验收覆盖深浅两种外观")
+        for sample in check.samples {
+            try require(sample.matches, "\(sample.appearance)：查找浮层保留 12 px，输入框与按钮按短边形成胶囊")
+            if !sample.focused { print("焦点样本：\(sample.focusDetails)") }
+            try require(sample.focused, "\(sample.appearance)：查找与替换输入框聚焦时胶囊形状不变，并显示焦点描边")
+        }
+        try require(check.opened && check.closed, "统一圆角后查找栏仍可打开、聚焦与关闭")
     }
 
     static func run(in view: WKWebView, state: AppState, outputDirectory: URL? = nil) async throws {
@@ -382,9 +487,47 @@ enum HeaderBackdropChecks {
         try require(!iconRect.isEmpty && abs(iconRect.midY - exportRect.midY) <= 1 &&
                     abs(iconRect.midX - exportRect.midX) <= 1 && exportRect.contains(iconRect),
                     "导出图标在实际按钮内部水平、垂直居中且没有裁切")
-        try require(export.borderShape == .circle && export.imagePosition == .imageOnly &&
-                    export.action != nil && export.target != nil && !(export is NSPopUpButton),
-                    "导出使用原生圆形图标按钮，不使用下拉控件的标题/箭头布局")
+        try require(export.borderShape == .circle && export.bezelStyle == .glass &&
+                    abs(exportRect.width - exportRect.height) <= 0.5 && abs(exportRect.width - 36) <= 0.5 &&
+                    export.imagePosition == .imageOnly && export.action != nil &&
+                    export.target != nil && !(export is NSPopUpButton),
+                    "导出使用 36×36 pt 正方形布局及原生玻璃圆形边框")
+        let backingScale = max(1, view.window?.backingScaleFactor ?? 1)
+        guard let image = export.image,
+              let imageBitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+                  pixelsWide: Int(image.size.width * backingScale), pixelsHigh: Int(image.size.height * backingScale),
+                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let imageContext = NSGraphicsContext(bitmapImageRep: imageBitmap) else {
+            throw failure("导出图标的可见笔画像素不可读")
+        }
+        // 按实际屏幕倍率绘制，避免低分辨率 TIFF 的像素舍入影响居中判断。
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = imageContext
+        imageContext.cgContext.scaleBy(x: backingScale, y: backingScale)
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        var minX = imageBitmap.pixelsWide, minY = imageBitmap.pixelsHigh, maxX = -1, maxY = -1
+        for y in 0..<imageBitmap.pixelsHigh {
+            for x in 0..<imageBitmap.pixelsWide where (imageBitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.02 {
+                minX = min(minX, x); minY = min(minY, y)
+                maxX = max(maxX, x); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX && maxY >= minY else { throw failure("导出图标没有可见笔画") }
+        let scaleX = iconRect.width / CGFloat(imageBitmap.pixelsWide)
+        let scaleY = iconRect.height / CGFloat(imageBitmap.pixelsHigh)
+        let visibleInkRect = NSRect(x: iconRect.minX + CGFloat(minX) * scaleX,
+                                   y: iconRect.minY + CGFloat(imageBitmap.pixelsHigh - maxY - 1) * scaleY,
+                                   width: CGFloat(maxX - minX + 1) * scaleX,
+                                   height: CGFloat(maxY - minY + 1) * scaleY)
+        print("导出图标可见笔画（\(backingScale)×）：\(visibleInkRect)，中心=(\(visibleInkRect.midX), \(visibleInkRect.midY))，按钮中心=(\(exportRect.midX), \(exportRect.midY))")
+        if let png = imageBitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: outputDirectory.appendingPathComponent("export-icon-render.png"))
+        }
+        try require(abs(visibleInkRect.midX - exportRect.midX) <= 0.5 &&
+                    abs(visibleInkRect.midY - exportRect.midY) <= 0.5 && exportRect.contains(visibleInkRect),
+                    "导出图标可见笔画水平、垂直居中，不仅校验图像外框")
         try require(export.menu?.items.map(\.title) == ["导出为 HTML…", "导出为 PDF…"] &&
                     export.menu?.items.allSatisfy({ $0.action != nil && $0.target != nil && !$0.isHidden && $0.isEnabled == export.isEnabled }) == true,
                     "导出菜单保留 HTML / PDF 两项及原有启用状态")

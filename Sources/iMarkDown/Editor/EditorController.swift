@@ -9,6 +9,7 @@ struct EditorConfig: Encodable {
     var editorFontSize: Double
     var previewFontSize: Double
     var baseDirectory: String
+    var uiCornerRadii: [String: Double] = DesignTokens.CornerRadius.webConfig
 
     var jsonString: String {
         guard let data = try? JSONEncoder().encode(self),

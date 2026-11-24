@@ -78,8 +78,8 @@ struct SidebarView: View {
                         .buttonStyle(.plain)
                         .help(item.title)
                     }
-                    .padding(.leading, CGFloat(max(0, item.level - 1)) * 10 + 6)
-                    .padding(.trailing, 6)
+                    .padding(.leading, CGFloat(max(0, item.level - 1)) * 10 + DesignTokens.rowHorizontalInset)
+                    .padding(.trailing, DesignTokens.rowHorizontalInset)
                     .padding(.vertical, 4)
                     .glassRow(isSelected: isActive)
                     .foregroundStyle(isActive ? Color.primary : Color.secondary)
@@ -103,7 +103,7 @@ struct SidebarView: View {
                         RecentRow(entry: entry, isCurrent: state.session.url?.path == entry.path)
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, DesignTokens.rowHorizontalInset)
                     .glassRow(isSelected: state.session.url?.path == entry.path)
                     .listRowBackground(Color.clear)
                     .disabled(!entry.exists)
@@ -151,7 +151,7 @@ struct SidebarView: View {
 
     private var brand: some View {
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.icon, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [Color(hex: 0x64D2FF), Color(hex: 0x0A7CFF)],
@@ -280,7 +280,7 @@ private struct FileTreeSection: View {
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, DesignTokens.rowHorizontalInset)
                     .padding(.vertical, 4)
                     .contentShape(Rectangle())
                 }
@@ -329,11 +329,11 @@ private struct FileTreeSection: View {
                 .help("清除搜索")
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, DesignTokens.rowHorizontalInset)
         .padding(.vertical, 7)
-        .glassChrome(.inset, in: RoundedRectangle(cornerRadius: DesignTokens.searchRadius, style: .continuous))
+        .glassChrome(.inset, in: DesignTokens.controlShape)
         .overlay {
-            RoundedRectangle(cornerRadius: DesignTokens.searchRadius, style: .continuous)
+            DesignTokens.controlShape
                 .strokeBorder(Color.accentColor.opacity(isSearchFocused ? 0.65 : 0), lineWidth: 1.2)
                 .allowsHitTesting(false)
         }
@@ -470,7 +470,7 @@ private struct FolderHistorySection: View {
                         FolderHistoryRow(folder: folder)
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, DesignTokens.rowHorizontalInset)
                     .glassRow()
                     .listRowBackground(Color.clear)
                     .disabled(!folder.exists)
@@ -617,7 +617,7 @@ private struct FileTreeRow: View {
                             .frame(width: 5, height: 5)
                     }
                 }
-                .padding(.horizontal, 6)
+                .padding(.horizontal, DesignTokens.rowHorizontalInset)
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
             }
@@ -737,9 +737,7 @@ struct GlassActionPair: View {
                 openButton.buttonStyle(.glass(.clear))
             }
             .padding(6)
-            .glassChrome(.regular,
-                         in: RoundedRectangle(cornerRadius: DesignTokens.dockRadius, style: .continuous),
-                         elevated: true)
+            .glassChrome(.regular, in: DesignTokens.controlShape, elevated: true)
         }
         .font(.system(size: 12, weight: .medium))
     }

@@ -55,7 +55,7 @@ struct EditorWorkspaceView: View {
         }
         .overlay {
             if isDropTargeted {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.container, style: .continuous)
                     .strokeBorder(
                         Color.accentColor,
                         style: StrokeStyle(lineWidth: 2, dash: [7, 5])
@@ -107,7 +107,7 @@ struct EditorWorkspaceView: View {
     private var exportButton: some View {
         NativeExportControl(isEnabled: !state.isDocumentOperationInProgress,
                             onHTML: { state.exportHTML() }, onPDF: { state.exportPDF() })
-            .frame(width: 32, height: 32)
+            .frame(width: 36, height: 36)
             .help("导出为 HTML / PDF")
     }
 
@@ -134,23 +134,51 @@ private struct NativeExportControl: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeNSView(context: Context) -> NSButton {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSButton, context: Context) -> CGSize? {
+        // 固定实际控件的正方形尺寸，不依赖工具栏根据图像推导宽高。
+        NSSize(width: 36, height: 36)
+    }
+
+    private static func centeredIcon() -> NSImage {
         let symbol = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: "导出文档") ?? NSImage()
-        // 独立模板图像不参与工具栏的文字基线排版；绘制保留纵横比及 Retina 分辨率。
+        var source = NSRect(origin: .zero, size: symbol.size)
+        // 去掉 SF Symbol 不对称的透明留白，以可见笔画而非原始画布居中。
+        if let data = symbol.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data) {
+            var minX = bitmap.pixelsWide, minY = bitmap.pixelsHigh, maxX = -1, maxY = -1
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.02 {
+                    minX = min(minX, x); minY = min(minY, y)
+                    maxX = max(maxX, x); maxY = max(maxY, y)
+                }
+            }
+            if maxX >= minX && maxY >= minY {
+                let scaleX = symbol.size.width / CGFloat(bitmap.pixelsWide)
+                let scaleY = symbol.size.height / CGFloat(bitmap.pixelsHigh)
+                source = NSRect(x: CGFloat(minX) * scaleX,
+                                y: CGFloat(bitmap.pixelsHigh - maxY - 1) * scaleY,
+                                width: CGFloat(maxX - minX + 1) * scaleX,
+                                height: CGFloat(maxY - minY + 1) * scaleY)
+            }
+        }
+        // 保留模板着色及分辨率适应能力，独立图像不参与文字基线排版。
         let image = NSImage(size: NSSize(width: 18, height: 20), flipped: false) { rect in
-            let size = symbol.size
-            guard size.width > 0, size.height > 0 else { return false }
-            let scale = min(rect.width / size.width, rect.height / size.height)
-            let target = NSRect(x: rect.midX - size.width * scale / 2,
-                                y: rect.midY - size.height * scale / 2,
-                                width: size.width * scale, height: size.height * scale)
-            symbol.draw(in: target)
+            guard source.width > 0, source.height > 0 else { return false }
+            let scale = min(rect.width / source.width, rect.height / source.height)
+            let target = NSRect(x: rect.midX - source.width * scale / 2,
+                                y: rect.midY - source.height * scale / 2,
+                                width: source.width * scale, height: source.height * scale)
+            symbol.draw(in: target, from: source, operation: .sourceOver, fraction: 1,
+                        respectFlipped: true, hints: nil)
             return true
         }
         image.isTemplate = true
-        let button = NSButton(image: image, target: context.coordinator, action: #selector(Coordinator.openMenu(_:)))
+        return image
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(image: Self.centeredIcon(), target: context.coordinator, action: #selector(Coordinator.openMenu(_:)))
         button.identifier = NSUserInterfaceItemIdentifier("iMarkDown.exportControl")
-        button.bezelStyle = .automatic
+        button.bezelStyle = .glass
         button.borderShape = .circle
         button.controlSize = .large
         button.imagePosition = .imageOnly

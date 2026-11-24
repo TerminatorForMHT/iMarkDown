@@ -862,6 +862,15 @@
     if (!config) { return; }
     var needsRender = false;
 
+    // 与原生组件共用圆角规格，只更新界面控件，不影响正文样式。
+    var cornerRadii = config.uiCornerRadii || {};
+    ['control', 'surface'].forEach(function (name) {
+      var value = cornerRadii[name];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        root.style.setProperty('--ui-' + name + '-radius', value + 'px');
+      }
+    });
+
     if (config.appearance) {
       state.appearance = config.appearance;
       root.dataset.appearance = config.appearance;

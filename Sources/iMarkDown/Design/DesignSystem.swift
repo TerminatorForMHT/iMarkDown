@@ -14,7 +14,23 @@ extension Color {
 }
 
 enum DesignTokens {
-    static let hudRadius: CGFloat = 15
+    /// 控件统一胶囊化，品牌图标与内容容器保留各自的普通圆角。
+    enum CornerRadius {
+        /// CSS 会按控件短边自动收敛该半径，形成与原生 Capsule 一致的胶囊。
+        static let capsule: CGFloat = 9999
+        static let icon: CGFloat = 8
+        static let surface: CGFloat = 12
+        static let container: CGFloat = 18
+
+        /// Web 查找控件随编辑器配置同步，CSS 中的数值仅作为页面初始化兜底。
+        static var webConfig: [String: Double] {
+            ["control": Double(capsule), "surface": Double(surface)]
+        }
+    }
+
+    /// 背景、描边与焦点框共用形状，圆弧随行高变化，不再单独传入固定半径。
+    static var controlShape: Capsule { Capsule(style: .circular) }
+    static let rowHorizontalInset: CGFloat = 12
     /// 顶部悬浮控件条带的高度，也是 Web 侧判定重叠的阈值。
     static let topBarHeight: CGFloat = 64
     /// 材质下缘的渐隐高度。
@@ -22,9 +38,6 @@ enum DesignTokens {
     static let topBarHorizontalInset: CGFloat = 22
     static let controlHeight: CGFloat = 30
     static let sidebarIconSize: CGFloat = 24
-    static let sidebarRowRadius: CGFloat = 8
-    static let searchRadius: CGFloat = 10
-    static let dockRadius: CGFloat = 22
     /// 隐藏标题栏后仍然存在的系统标题栏高度，用于补回拖拽 / 双击缩放。
     static let titleBarHeight: CGFloat = 28
     /// 侧栏收起时，紧凑标题要让开红绿灯与系统侧栏开关所占的宽度。
@@ -52,11 +65,9 @@ extension View {
 
     func glassRow(
         isSelected: Bool = false,
-        selectionTone: GlassTone = .selection,
-        cornerRadius: CGFloat = DesignTokens.sidebarRowRadius
+        selectionTone: GlassTone = .selection
     ) -> some View {
-        modifier(GlassRowModifier(isSelected: isSelected, selectionTone: selectionTone,
-                                  cornerRadius: cornerRadius))
+        modifier(GlassRowModifier(isSelected: isSelected, selectionTone: selectionTone))
     }
 
     func glassIconControl() -> some View {
@@ -126,7 +137,6 @@ private struct GlassChromeModifier<S: InsettableShape>: ViewModifier {
 private struct GlassRowModifier: ViewModifier {
     let isSelected: Bool
     let selectionTone: GlassTone
-    let cornerRadius: CGFloat
     @State private var isHovered = false
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -137,7 +147,7 @@ private struct GlassRowModifier: ViewModifier {
                 if isSelected || (isHovered && isEnabled) {
                     Color.clear
                         .glassChrome(isSelected ? selectionTone : .clear,
-                                     in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                                     in: DesignTokens.controlShape)
                         .allowsHitTesting(false)
                 }
             }
@@ -189,7 +199,7 @@ private struct SidebarBackdrop: NSViewRepresentable {
 /// 官方 Liquid Glass 的 AppKit 入口。SwiftUI 浮层用 `.glassEffect`，
 /// 需要在 NSView 层级上做玻璃背景（并要求自定义圆角 / tint）时走这里。
 struct GlassSurface: NSViewRepresentable {
-    var cornerRadius: CGFloat = DesignTokens.hudRadius
+    var cornerRadius: CGFloat = DesignTokens.CornerRadius.surface
     var tint: NSColor = .clear
 
     func makeNSView(context: Context) -> NSView {
