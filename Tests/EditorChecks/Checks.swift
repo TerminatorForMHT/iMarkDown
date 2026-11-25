@@ -129,6 +129,7 @@ struct EditorChecks {
         state.editor.setDocument(text: "![](../outside.png)", baseDirectory: directory.absoluteString)
         _ = try await state.editor.currentText()
         try expect(try await bool(view, "!document.querySelector('#preview img').hasAttribute('src')"), "预览拒绝越界图片")
+        try await PreviewThemeChecks.run(state: state, view: view, directory: directory)
 
         let sample = (0..<2500).map { $0 % 50 == 0 ? "## 章节 \($0)\n" : "中英文混排 Mixed text\n" }.joined()
         state.editor.setDocument(text: sample, baseDirectory: nil)
