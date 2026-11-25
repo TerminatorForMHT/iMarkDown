@@ -2,12 +2,70 @@ import AppKit
 import MarkdownKit
 import SwiftUI
 
+/// 同一文件可出现在多个区域，系统选择只标记用户实际操作的那一行。
+struct SidebarFileSelection: Hashable {
+    enum Location { case tree, recent }
+    let location: Location
+    let url: URL
+
+    init(_ location: Location, _ url: URL) {
+        self.location = location
+        self.url = url.standardizedFileURL
+    }
+}
+
+/// 只衔接系统选择与异步文档操作，不负责行的颜色、焦点或键盘反馈。
+@MainActor
+final class SidebarFileSelectionState: ObservableObject {
+    @Published private(set) var value: SidebarFileSelection?
+    private var pendingOpen: Task<Void, Never>?
+
+    @discardableResult
+    func select(_ item: SidebarFileSelection?, in state: AppState) -> Task<Void, Never>? {
+        guard pendingOpen == nil, !state.isDocumentOperationInProgress else { return nil }
+        guard let item else { value = nil; return nil }
+        guard item != value else { return nil }
+        let previous = value
+        value = item
+        // 仅切换同一文件所在的行，不重新读盘或清空编辑器历史。
+        guard state.session.url?.standardizedFileURL != item.url else { return nil }
+        let task = Task { @MainActor in
+            await state.requestOpen(url: item.url).value
+            if state.session.url?.standardizedFileURL != item.url { value = previous }
+            pendingOpen = nil
+            synchronize(in: state)
+        }
+        pendingOpen = task
+        return task
+    }
+
+    func synchronize(in state: AppState) {
+        guard pendingOpen == nil else { return }
+        guard let url = state.session.url?.standardizedFileURL else { value = nil; return }
+        let inTree = state.workspace.rootURL.map {
+            let path = $0.standardizedFileURL.path
+            return url.path.hasPrefix(path.hasSuffix("/") ? path : path + "/")
+        } ?? false
+        let inRecents = state.recents.items.contains { $0.url.standardizedFileURL == url && $0.exists }
+        if value?.url == url,
+           (value?.location == .tree ? inTree : inRecents) { return }
+        if value?.location == .tree && inTree { value = SidebarFileSelection(.tree, url) }
+        else { value = inRecents ? SidebarFileSelection(.recent, url) : nil }
+    }
+}
+
+@MainActor
 struct SidebarView: View {
     @EnvironmentObject private var state: AppState
+    @StateObject private var fileSelection: SidebarFileSelectionState
     @State private var collapsedHeadings: Set<Int> = []
 
+    init(fileSelection: SidebarFileSelectionState? = nil) {
+        _fileSelection = StateObject(wrappedValue: fileSelection ?? SidebarFileSelectionState())
+    }
+
     var body: some View {
-        List {
+        List(selection: Binding(get: { fileSelection.value }, set: { _ = fileSelection.select($0, in: state) })) {
             outlineSection
 
             FileTreeSection(workspace: state.workspace)
@@ -27,6 +85,12 @@ struct SidebarView: View {
         }
         .background { SidebarGlassBackground().ignoresSafeArea() }
         .navigationTitle("iMarkDown")
+        .onAppear { fileSelection.synchronize(in: state) }
+        .onChange(of: state.session.url) { _, _ in fileSelection.synchronize(in: state) }
+        .onChange(of: state.recents.items) { _, _ in fileSelection.synchronize(in: state) }
+        .onReceive(state.workspace.$rootURL) { _ in
+            Task { @MainActor in fileSelection.synchronize(in: state) }
+        }
         .onChange(of: state.outline) { old, new in
             if old != new { collapsedHeadings.removeAll() }
         }
@@ -81,7 +145,7 @@ struct SidebarView: View {
                     .padding(.leading, CGFloat(max(0, item.level - 1)) * 10 + DesignTokens.rowHorizontalInset)
                     .padding(.trailing, DesignTokens.rowHorizontalInset)
                     .padding(.vertical, 4)
-                    .glassRow(isSelected: isActive)
+                    .outlineReadingPosition(isActive: isActive)
                     .foregroundStyle(isActive ? Color.primary : Color.secondary)
                     .listRowBackground(Color.clear)
                 }
@@ -89,23 +153,18 @@ struct SidebarView: View {
         } header: {
             Text("大纲")
         }
+        .selectionDisabled()
     }
 
     private var recentSection: some View {
         Section {
             if state.recents.items.isEmpty {
-                emptyHint
+                emptyHint.selectionDisabled()
             } else {
                 ForEach(state.recents.items) { entry in
-                    Button {
-                        state.requestOpen(url: entry.url)
-                    } label: {
-                        RecentRow(entry: entry, isCurrent: state.session.url?.path == entry.path)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, DesignTokens.rowHorizontalInset)
-                    .glassRow(isSelected: state.session.url?.path == entry.path)
-                    .listRowBackground(Color.clear)
+                    RecentRow(entry: entry, isCurrent: state.session.url?.standardizedFileURL == entry.url.standardizedFileURL)
+                    .tag(SidebarFileSelection(.recent, entry.url))
+                    .selectionDisabled(!entry.exists || state.isDocumentOperationInProgress)
                     .disabled(!entry.exists)
                     .contextMenu {
                         Button("在 Finder 中显示") {
@@ -213,7 +272,7 @@ private struct RecentRow: View {
         HStack(spacing: 10) {
             Image(systemName: "doc.richtext")
                 .font(.system(size: 14))
-                .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+                .foregroundStyle(.secondary)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -222,7 +281,7 @@ private struct RecentRow: View {
                     .lineLimit(1)
                 Text(abbreviatedPath)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -231,7 +290,7 @@ private struct RecentRow: View {
 
             if isCurrent {
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(.primary)
                     .frame(width: 5, height: 5)
             }
         }
@@ -285,7 +344,7 @@ private struct FileTreeSection: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .glassRow()
+                .selectionDisabled()
                 .listRowBackground(Color.clear)
             }
         } header: {
@@ -339,6 +398,7 @@ private struct FileTreeSection: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSearchFocused)
         .padding(.vertical, 2)
+        .selectionDisabled()
         .listRowBackground(Color.clear)
     }
 
@@ -350,6 +410,7 @@ private struct FileTreeSection: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .padding(.vertical, 4)
+                .selectionDisabled()
         } else {
             ForEach(children) { node in
                 FileTreeRow(workspace: workspace, node: node)
@@ -368,11 +429,13 @@ private struct FileTreeSection: View {
                     .foregroundStyle(.tertiary)
             }
             .padding(.vertical, 4)
+            .selectionDisabled()
         } else if results.isEmpty {
             Text("没有匹配的文件")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .padding(.vertical, 4)
+                .selectionDisabled()
         } else {
             ForEach(results) { node in
                 FileTreeRow(
@@ -471,7 +534,7 @@ private struct FolderHistorySection: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, DesignTokens.rowHorizontalInset)
-                    .glassRow()
+                    .selectionDisabled()
                     .listRowBackground(Color.clear)
                     .disabled(!folder.exists)
                     .contextMenu {
@@ -581,6 +644,7 @@ private struct FileTreeRow: View {
                         .foregroundStyle(Color.accentColor.opacity(0.9))
                 }
             }
+            .selectionDisabled()
             .contextMenu {
                 Button("新建 Markdown 文件…") { createFile() }
                 Divider()
@@ -589,41 +653,35 @@ private struct FileTreeRow: View {
                 }
             }
         } else {
-            Button {
-                state.requestOpen(url: node.url)
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "doc.text")
+            HStack(spacing: 7) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(node.name)
                         .font(.system(size: 12))
-                        .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
-                        .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(node.name)
-                            .font(.system(size: 12))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if let subtitle {
-                            Text(subtitle)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    Spacer(minLength: 2)
-                    if isCurrent {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 5, height: 5)
                     }
                 }
-                .padding(.horizontal, DesignTokens.rowHorizontalInset)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+                Spacer(minLength: 2)
+                if isCurrent {
+                    Circle()
+                        .fill(.primary)
+                        .frame(width: 5, height: 5)
+                }
             }
-            .buttonStyle(.plain)
-            .glassRow(isSelected: isCurrent)
-            .listRowBackground(Color.clear)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .tag(SidebarFileSelection(.tree, node.url))
+            .selectionDisabled(state.isDocumentOperationInProgress)
             .contextMenu {
                 Button("打开") { state.requestOpen(url: node.url) }
                 Button("在 Finder 中显示") {
@@ -706,6 +764,7 @@ private struct FileTreeRow: View {
     private var isCurrent: Bool {
         state.session.url?.standardizedFileURL == node.url.standardizedFileURL
     }
+
 }
 
 @MainActor
@@ -760,3 +819,190 @@ struct GlassActionPair: View {
         .buttonBorderShape(.capsule)
     }
 }
+
+#if IMARKDOWN_UI_CHECK
+/// 独立会话中的真实系统 List 回归，不读取用户文档或使用用户偏好。
+@MainActor
+enum SidebarSelectionChecks {
+    static func run(outputDirectory: URL) async throws {
+        let root = outputDirectory.appendingPathComponent("native-list-fixture", isDirectory: true)
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let a = root.appendingPathComponent("A.md"), b = root.appendingPathComponent("B.md")
+        let child = nested.appendingPathComponent("Child.md"), missing = root.appendingPathComponent("Missing.md")
+        for url in [a, b, child] { try FileService.write("# \(url.lastPathComponent)", to: url) }
+        let defaults = UserDefaults(suiteName: "iMarkDownSidebarChecks-\(UUID().uuidString)")!
+        let settings = AppSettings(defaults: defaults)
+        settings.autoSaveEnabled = false
+        let state = AppState(settings: settings, recents: RecentFilesStore(defaults: defaults),
+                             workspace: WorkspaceStore(defaults: defaults), defaults: defaults,
+                             draftStore: DraftStore(fileURL: root.appendingPathComponent("draft.md")))
+        state.recents.record(missing)
+        state.recents.record(b)
+        await state.requestOpen(url: a).value
+        await state.openFolder(at: root).value
+        let selection = SidebarFileSelectionState()
+        let host = NSHostingView(rootView: SidebarView(fileSelection: selection).environmentObject(state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 740),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.title = "系统侧栏隔离验收"
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        let focusWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        focusWindow.title = "焦点验收"
+        focusWindow.isReleasedWhenClosed = false
+        defer { focusWindow.close(); window.close() }
+        try await Task.sleep(nanoseconds: 400_000_000)
+        func findTable(_ view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap { findTable($0) }.first
+        }
+        guard let table = findTable(host) else { throw HeaderBackdropChecks.failure("侧栏没有系统 List 表格") }
+        try HeaderBackdropChecks.require(table.delegate != nil && table.selectedRow >= 0 &&
+            table.selectedRowIndexes.count == 1 && selection.value == SidebarFileSelection(.recent, a),
+            "系统 List 使用单行选择，并从当前文档恢复最近文件行")
+        let recentARow = table.selectedRow
+        let epoch = state.editor.documentEpoch
+        state.session.text += "\n未保存内容"
+        var prompts = 0
+        state.alertResponseForChecks = { _ in prompts += 1; return .alertThirdButtonReturn }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(table)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        print("原生侧栏宿主：应用激活=\(NSApp.isActive)，窗口激活=\(window.isKeyWindow)，行数=\(table.numberOfRows)，选中行=\(table.selectedRow)，焦点=\(String(describing: window.firstResponder))")
+        func pressDown() throws {
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}", isARepeat: false, keyCode: 125) else {
+                throw HeaderBackdropChecks.failure("侧栏键盘事件不可用")
+            }
+            NSApp.sendEvent(event)
+        }
+        try pressDown()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        print("取消键盘切换：确认次数=\(prompts)，文件=\(String(describing: state.session.url))，选择=\(String(describing: selection.value))，表格行=\(table.selectedRow)")
+        try HeaderBackdropChecks.require(prompts == 1 && state.session.url == a && state.session.isDirty &&
+            selection.value == SidebarFileSelection(.recent, a) && table.selectedRow == recentARow,
+            "原生向下键触发未保存确认，取消后文档与实际选中行均恢复")
+        state.alertResponseForChecks = { _ in prompts += 1; return .alertSecondButtonReturn }
+        try pressDown()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        print("确认键盘切换：确认次数=\(prompts)，文件=\(String(describing: state.session.url))，选择=\(String(describing: selection.value))，表格行=\(table.selectedRow)")
+        try HeaderBackdropChecks.require(prompts == 2 && state.session.url == b &&
+            selection.value == SidebarFileSelection(.recent, b) && table.selectedRowIndexes.count == 1,
+            "系统向下键可以打开下一文件，并在最近记录重排后保持正确选择")
+        let recentBRow = table.selectedRow
+        guard let outline = table as? NSOutlineView,
+              let missingItem = outline.item(atRow: table.numberOfRows - 1) else {
+            throw HeaderBackdropChecks.failure("未找到失效最近文件的系统行")
+        }
+        try HeaderBackdropChecks.require(outline.delegate?.outlineView?(outline, shouldSelectItem: missingItem) == false,
+            "系统选择代理禁止选择失效的最近文件行")
+        let sameFileEpoch = state.editor.documentEpoch
+        selection.select(SidebarFileSelection(.tree, b), in: state)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        try HeaderBackdropChecks.require(state.editor.documentEpoch == sameFileEpoch && table.selectedRow >= 0 &&
+            table.selectedRow != recentBRow && table.selectedRowIndexes.count == 1,
+            "同文件的文件树与最近行使用不同标识，只选中一处且不重置编辑历史")
+        await selection.select(SidebarFileSelection(.recent, missing), in: state)?.value
+        try await Task.sleep(nanoseconds: 150_000_000)
+        try HeaderBackdropChecks.require(state.session.url == b && selection.value == SidebarFileSelection(.tree, b) &&
+            state.activeAlert != nil && !state.isDocumentOperationInProgress, "打开失败恢复原选择并释放文档操作锁")
+        state.activeAlert = nil
+        state.session.text += "\n并发保护内容"
+        state.alertResponseForChecks = { _ in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            return .alertThirdButtonReturn
+        }
+        let pending = selection.select(SidebarFileSelection(.recent, a), in: state)
+        let refused = selection.select(SidebarFileSelection(.tree, child), in: state)
+        await pending?.value
+        try HeaderBackdropChecks.require(refused == nil && state.session.url == b &&
+            selection.value == SidebarFileSelection(.tree, b), "确认进行中不接受第二次选择，取消后恢复原文件")
+        state.alertResponseForChecks = { _ in .alertSecondButtonReturn }
+        await state.requestOpen(url: child).value
+        selection.select(SidebarFileSelection(.tree, child), in: state)
+        try await Task.sleep(nanoseconds: 350_000_000)
+        try HeaderBackdropChecks.require(table.selectedRow >= 0 && selection.value == SidebarFileSelection(.tree, child),
+            "嵌套 DisclosureGroup 子文件也接入系统选择")
+        window.makeFirstResponder(table)
+        try pressDown()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        try HeaderBackdropChecks.require(state.session.url == a && selection.value == SidebarFileSelection(.tree, a),
+            "嵌套文件与根目录文件之间的原生键盘导航可用")
+        state.outline = OutlineParser.parse("# 构建与运行\n\n## 运行测试")
+        state.activeHeadingIndex = 0
+        let originalAppearance = NSApp.appearance
+        defer { NSApp.appearance = originalAppearance }
+        for (name, appearanceName, scheme, increased) in [
+            ("light", NSAppearance.Name.aqua, ColorScheme.light, false),
+            ("dark", NSAppearance.Name.darkAqua, ColorScheme.dark, false),
+            ("light-contrast", NSAppearance.Name.accessibilityHighContrastAqua, ColorScheme.light, true),
+            ("dark-contrast", NSAppearance.Name.accessibilityHighContrastDarkAqua, ColorScheme.dark, true)
+        ] {
+            NSApp.appearance = NSAppearance(named: appearanceName)
+            window.appearance = NSApp.appearance
+            for active in [true, false] {
+                if active { window.makeKeyAndOrderFront(nil); window.makeFirstResponder(table) }
+                else { focusWindow.makeKeyAndOrderFront(nil) }
+                try await Task.sleep(nanoseconds: 150_000_000)
+                try HeaderBackdropChecks.require(table.selectedRowIndexes.count == 1 && window.isKeyWindow == active,
+                    "\(name)：真实窗口激活／非激活时系统仍保留单行选择")
+                var ratio = 0.0
+                window.effectiveAppearance.performAsCurrentDrawingAppearance {
+                    ratio = contrast(.labelColor, OutlineReadingPositionStyle.background(
+                        appearsActive: active, colorScheme: scheme, increasedContrast: increased))
+                }
+                try HeaderBackdropChecks.require(ratio >= 4.5, "\(name)：大纲阅读位置保持文字可读性")
+                // 离屏缓存不能完整采样系统玻璃与合成图层，仅保留诊断图，不用于外观验收。
+                window.displayIfNeeded()
+                guard let frameView = window.contentView?.superview,
+                      let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else {
+                    throw HeaderBackdropChecks.failure("原生侧栏快照不可用")
+                }
+                window.effectiveAppearance.performAsCurrentDrawingAppearance {
+                    frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
+                }
+                guard let png = bitmap.representation(using: .png, properties: [:]) else {
+                    throw HeaderBackdropChecks.failure("原生侧栏 PNG 编码失败")
+                }
+                try png.write(to: outputDirectory.appendingPathComponent("sidebar-native-\(name)-\(active ? "active" : "inactive").png"))
+            }
+        }
+        state.alertResponseForChecks = { _ in .alertSecondButtonReturn }
+        await state.newDocument().value
+        try await Task.sleep(nanoseconds: 150_000_000)
+        try HeaderBackdropChecks.require(selection.value == nil && table.selectedRow == -1,
+            "新建文档后系统文件选择清空")
+        state.session.text = "未命名草稿"
+        state.alertResponseForChecks = { _ in .alertFirstButtonReturn }
+        state.panelURLForChecks = { _ in nil }
+        await selection.select(SidebarFileSelection(.recent, a), in: state)?.value
+        try HeaderBackdropChecks.require(state.session.url == nil && selection.value == nil && state.session.isDirty,
+            "取消草稿另存为后不留下错误选中项")
+        try HeaderBackdropChecks.require(epoch < state.editor.documentEpoch, "回归确实执行了文档切换")
+        print("SIDEBAR_SELECTION_CHECK_PASSED：真实系统 List、键盘导航、取消恢复、窗口激活状态与大纲对比度通过；离屏图仅供诊断，玻璃外观需另行验收")
+    }
+
+    private static func contrast(_ foreground: NSColor, _ background: NSColor) -> Double {
+        func components(_ color: NSColor) -> [Double] {
+            guard let rgb = color.usingColorSpace(.sRGB) else { return [0, 0, 0, 0] }
+            return [Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent), Double(rgb.alphaComponent)]
+        }
+        func blend(_ color: [Double], over base: [Double]) -> [Double] {
+            (0..<3).map { color[$0] * color[3] + base[$0] * (1 - color[3]) } + [1]
+        }
+        func luminance(_ color: [Double]) -> Double {
+            let linear = color.prefix(3).map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+            return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+        }
+        let backgroundRGB = blend(components(background), over: components(.windowBackgroundColor))
+        let back = luminance(backgroundRGB)
+        let front = luminance(blend(components(foreground), over: backgroundRGB))
+        return (max(front, back) + 0.05) / (min(front, back) + 0.05)
+    }
+}
+#endif

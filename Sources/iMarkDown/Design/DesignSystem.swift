@@ -14,10 +14,11 @@ extension Color {
 }
 
 enum DesignTokens {
-    /// 控件统一胶囊化，品牌图标与内容容器保留各自的普通圆角。
+    /// 操作控件采用胶囊，侧栏列表、品牌图标与内容容器使用各自的普通圆角。
     enum CornerRadius {
         /// CSS 会按控件短边自动收敛该半径，形成与原生 Capsule 一致的胶囊。
         static let capsule: CGFloat = 9999
+        static let outlineRow: CGFloat = 8
         static let icon: CGFloat = 8
         static let surface: CGFloat = 12
         static let container: CGFloat = 18
@@ -28,8 +29,11 @@ enum DesignTokens {
         }
     }
 
-    /// 背景、描边与焦点框共用形状，圆弧随行高变化，不再单独传入固定半径。
+    /// 操作控件共用胶囊；文件行由系统绘制，仅大纲阅读位置需要自定义形状。
     static var controlShape: Capsule { Capsule(style: .circular) }
+    static var outlineRowShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: CornerRadius.outlineRow, style: .continuous)
+    }
     static let rowHorizontalInset: CGFloat = 12
     /// 顶部悬浮控件条带的高度，也是 Web 侧判定重叠的阈值。
     static let topBarHeight: CGFloat = 64
@@ -63,11 +67,8 @@ extension View {
         modifier(GlassChromeModifier(tone: tone, shape: shape, elevated: elevated))
     }
 
-    func glassRow(
-        isSelected: Bool = false,
-        selectionTone: GlassTone = .selection
-    ) -> some View {
-        modifier(GlassRowModifier(isSelected: isSelected, selectionTone: selectionTone))
+    func outlineReadingPosition(isActive: Bool) -> some View {
+        modifier(OutlineReadingPositionModifier(isActive: isActive))
     }
 
     func glassIconControl() -> some View {
@@ -133,28 +134,40 @@ private struct GlassChromeModifier<S: InsettableShape>: ViewModifier {
     }
 }
 
-/// 只为选中项与当前悬停项创建玻璃，避免长大纲中的每一行都持有材质层。
-private struct GlassRowModifier: ViewModifier {
-    let isSelected: Bool
-    let selectionTone: GlassTone
-    @State private var isHovered = false
-    @Environment(\.isEnabled) private var isEnabled
+/// 大纲高亮表示阅读位置，与系统文件列表的选择状态独立。
+enum OutlineReadingPositionStyle {
+    static func background(appearsActive: Bool, colorScheme: ColorScheme, increasedContrast: Bool) -> NSColor {
+        guard appearsActive else {
+            return NSColor.labelColor.withAlphaComponent(increasedContrast ? 0.14 : 0.08)
+        }
+        let alpha: CGFloat = increasedContrast ? (colorScheme == .dark ? 0.30 : 0.22)
+            : (colorScheme == .dark ? 0.20 : 0.12)
+        return NSColor.selectedContentBackgroundColor.withAlphaComponent(alpha)
+    }
+}
+
+private struct OutlineReadingPositionModifier: ViewModifier {
+    let isActive: Bool
+    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
             .background {
-                if isSelected || (isHovered && isEnabled) {
-                    Color.clear
-                        .glassChrome(isSelected ? selectionTone : .clear,
-                                     in: DesignTokens.controlShape)
+                if isActive {
+                    DesignTokens.outlineRowShape
+                        .fill(Color(nsColor: OutlineReadingPositionStyle.background(
+                            appearsActive: appearsActive, colorScheme: colorScheme,
+                            increasedContrast: contrast == .increased
+                        )))
                         .allowsHitTesting(false)
                 }
             }
-            .onHover { isHovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isSelected)
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isActive)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: appearsActive)
+            .accessibilityValue(isActive ? "当前阅读章节" : "")
     }
 }
 

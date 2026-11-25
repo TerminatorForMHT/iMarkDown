@@ -122,10 +122,11 @@ struct MarkdownWebView: NSViewRepresentable {
                             if ProcessInfo.processInfo.environment["IMARKDOWN_SETTINGS_CHECKS"] == "1" {
                                 try await SettingsWindowChecks.run(outputDirectory: output)
                             }
+                            try await SidebarSelectionChecks.run(outputDirectory: output)
                             try await HeaderBackdropChecks.checkCornerRadii(in: webView)
                             try HeaderBackdropChecks.captureModeControl(in: webView, outputDirectory: output)
                             if ProcessInfo.processInfo.environment["IMARKDOWN_UI_LAYOUT_ONLY"] == "1" {
-                                print("UI_LAYOUT_CHECK_PASSED：原生导出按钮与实际图标右侧居中对齐")
+                                print("UI_LAYOUT_CHECK_PASSED：侧栏选中样式、胶囊控件与原生工具栏布局检查通过")
                             } else {
                                 try await HeaderBackdropChecks.run(in: webView, state: state, outputDirectory: output)
                                 print("UI_CHECK_PASSED：顶部模糊像素回归和工具栏结构检查通过；整窗玻璃外观需另行验收")
