@@ -47,6 +47,15 @@ struct EditorWorkspaceView: View {
             ToolbarItem(id: "iMarkDown.export", placement: .primaryAction) {
                 exportButton
             }
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+            ToolbarItem(id: "iMarkDown.settings", placement: .primaryAction) {
+                SettingsLink {
+                    Label("设置", systemImage: "gearshape")
+                }
+                .labelStyle(.iconOnly)
+                .help("设置")
+                .accessibilityLabel("设置")
+            }
             ToolbarItem(placement: .status) {
                 if state.isExporting {
                     ProgressView().controlSize(.small)
