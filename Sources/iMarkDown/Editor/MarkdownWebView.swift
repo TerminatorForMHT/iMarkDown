@@ -380,7 +380,7 @@ enum HeaderBackdropChecks {
                         "\(Int(height)) pt 控件：共用胶囊路径，背景与内描边随高度一致变化")
         }
         let config = EditorConfig(appearance: "light", previewTheme: "github", editorFontSize: 14,
-                                  previewFontSize: 15.5, baseDirectory: "")
+                                  previewFontSize: 15.5, baseDirectory: "", accentColor: "#0a7cff")
         struct RadiusPayload: Decodable { let uiCornerRadii: [String: Double] }
         let payload = try JSONDecoder().decode(RadiusPayload.self, from: Data(config.jsonString.utf8))
         try require(payload.uiCornerRadii == DesignTokens.CornerRadius.webConfig,

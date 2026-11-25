@@ -388,9 +388,24 @@ final class AppState: ObservableObject {
             previewTheme: settings.previewTheme.rawValue,
             editorFontSize: settings.editorFontSize,
             previewFontSize: settings.previewFontSize,
-            baseDirectory: session.baseDirectoryURL ?? ""
+            baseDirectory: session.baseDirectoryURL ?? "",
+            accentColor: systemAccentHex
         )
         editor.apply(config)
+    }
+
+    /// Web 编辑器没有系统强调色，只能由原生把当前 accent 以十六进制下发。
+    private var systemAccentHex: String {
+        guard let color = NSColor.controlAccentColor.usingColorSpace(.sRGB) else {
+            return "#0a7cff"
+        }
+        func channel(_ value: CGFloat) -> Int {
+            Int((min(max(value, 0), 1) * 255).rounded())
+        }
+        return String(format: "#%02x%02x%02x",
+                      channel(color.redComponent),
+                      channel(color.greenComponent),
+                      channel(color.blueComponent))
     }
 
     // MARK: - 文档操作

@@ -56,7 +56,7 @@ struct StatusHUDView: View {
         case .unsaved:
             return .orange
         case .saving:
-            return .blue
+            return .accentColor
         case .saved:
             return .green
         case .idle:

@@ -148,7 +148,7 @@ Web → 原生（`window.webkit.messageHandlers.editor.postMessage`）：
 | --- | --- |
 | `MD.setDocument(text, baseDirectory, epoch)` | 静默替换全文、清空历史与滚动、重渲染；`epoch` 为新文档代数，旧代数的 `change` 会被原生丢弃 |
 | `MD.setMode('source' \| 'split' \| 'preview')` | 切换布局 |
-| `MD.applyConfig({appearance, previewTheme, editorFontSize, previewFontSize, baseDirectory})` | 主题与排版快照 |
+| `MD.applyConfig({appearance, previewTheme, editorFontSize, previewFontSize, baseDirectory, accentColor})` | 主题、排版与系统强调色快照 |
 | `MD.wrap(before, after)` / `MD.insert(text)` | 格式化命令、插入内容 |
 | `MD.getText()` / `MD.getArticleHTML()` | 保存与导出前同步拉取 |
 | `MD.focus()` | 聚焦编辑器 |

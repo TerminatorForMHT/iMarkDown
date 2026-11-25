@@ -242,6 +242,7 @@ private struct RecentRow: View {
                 Text(entry.name)
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Text(abbreviatedPath)
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)

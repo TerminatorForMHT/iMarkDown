@@ -32,6 +32,8 @@
     editorFontSize: 14,
     previewFontSize: 15.5,
     baseDirectory: '',
+    // 系统强调色（#rrggbb），由原生下发；光标/选区/匹配括号统一用它。
+    accent: '',
     suppress: false,
     readOnly: false,
     // 文档代数：每次 setDocument 递增，change 事件带上代数，
@@ -858,6 +860,25 @@
     });
   }
 
+  // 把原生下发的 #rrggbb 强调色按当前外观换算成选区/当前行需要的半透明色。
+  function accentWithAlpha(alpha) {
+    var hex = state.accent.replace('#', '');
+    if (hex.length !== 6) { return ''; }
+    var channels = [0, 2, 4].map(function (start) { return parseInt(hex.slice(start, start + 2), 16); });
+    if (!channels.every(function (value) { return Number.isFinite(value); })) { return ''; }
+    return 'rgba(' + channels.join(',') + ',' + alpha + ')';
+  }
+
+  function applyAccent() {
+    if (!state.accent) { return; }
+    var dark = state.appearance === 'dark';
+    var selection = accentWithAlpha(dark ? 0.22 : 0.16);
+    var activeLine = accentWithAlpha(dark ? 0.05 : 0.035);
+    root.style.setProperty('--accent', state.accent);
+    if (selection) { root.style.setProperty('--selection', selection); }
+    if (activeLine) { root.style.setProperty('--active-line', activeLine); }
+  }
+
   function applyConfig(config) {
     if (!config) { return; }
     var needsRender = false;
@@ -896,6 +917,12 @@
       state.baseDirectory = config.baseDirectory;
       needsRender = true;
     }
+
+    if (typeof config.accentColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(config.accentColor)) {
+      state.accent = config.accentColor.toLowerCase();
+    }
+    // 强调色与透明度都依赖当前外观，放在 appearance 更新之后统一应用。
+    applyAccent();
 
     cm.refresh();
     if (needsRender) { render(); }

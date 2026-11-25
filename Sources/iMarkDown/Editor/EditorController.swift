@@ -9,6 +9,8 @@ struct EditorConfig: Encodable {
     var editorFontSize: Double
     var previewFontSize: Double
     var baseDirectory: String
+    /// 系统强调色，Web 侧用同一颜色绘制光标、选区和匹配括号，避免出现第二套蓝。
+    var accentColor: String
     var uiCornerRadii: [String: Double] = DesignTokens.CornerRadius.webConfig
 
     var jsonString: String {
