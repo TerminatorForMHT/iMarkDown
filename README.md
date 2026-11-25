@@ -12,7 +12,7 @@
 - 遵循系统设计语言：文件列表由系统绘制选中反馈，搜索与操作控件采用胶囊形状，内容容器保留普通圆角
 - 官方 Liquid Glass：`glassEffect`、`GlassEffectContainer`、`NSGlassEffectView`（最低支持 macOS 26）
 - 本地文件读写、最近文件、防抖自动保存、草稿恢复与未保存提醒；取消切换或打开失败后保留当前文档并恢复侧栏选择
-- 浅色 / 深色 / 跟随系统，github / serif / compact 三套预览主题
+- 浅色 / 深色 / 跟随系统，GitHub、阅读（衬线）、紧凑、纸感、技术文档、专注阅读六套预览风格；在「设置 → 排版」切换，HTML / PDF 导出复用所选风格
 - 导出 HTML / PDF（A4 自动分页），PDF 支持中文排版
 - 全部前端依赖已 vendored 到仓库，离线可用，无需 Node
 
