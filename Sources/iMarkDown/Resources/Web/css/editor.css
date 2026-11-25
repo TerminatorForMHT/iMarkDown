@@ -1,63 +1,414 @@
-/* 导出专用：让同一份文章脱离应用后依然有合适的版心与分页行为。 */
+:root {
+  --editor-font-size: 14px;
+  --preview-font-size: 15.5px;
+  /* 页面初始化兜底；原生 DesignTokens.CornerRadius 通过配置推送实际值。 */
+  --ui-control-radius: 9999px;
+  --ui-surface-radius: 12px;
+
+  --fg: #1c1c1e;
+  --fg-muted: #6e6e73;
+  --fg-faint: #9a9aa0;
+
+  --editor-bg: #ffffff;
+  --surface-top: #ffffff;
+  --field-bg: rgba(15, 23, 42, 0.045);
+  --pane-divider: rgba(15, 23, 42, 0.075);
+  --hairline: rgba(15, 23, 42, 0.06);
+
+  --accent: #0a7cff;
+  --selection: rgba(10, 124, 255, 0.16);
+  --active-line: rgba(10, 124, 255, 0.035);
+
+  --cm-heading: #0b3d91;
+  --cm-emphasis: #b0355b;
+  --cm-link: #0a7cff;
+  --cm-code: #8a3ffc;
+  --cm-quote: #5b7f74;
+  --cm-comment: #8e8e93;
+}
+
+html[data-appearance="dark"] {
+  --fg: #f2f2f7;
+  --fg-muted: #a1a1aa;
+  --fg-faint: #76767e;
+
+  --editor-bg: #1b1b1d;
+  --surface-top: #1b1b1e;
+  --field-bg: rgba(255, 255, 255, 0.06);
+  --pane-divider: rgba(255, 255, 255, 0.075);
+  --hairline: rgba(255, 255, 255, 0.06);
+
+  --accent: #4da3ff;
+  --selection: rgba(77, 163, 255, 0.22);
+  --active-line: rgba(77, 163, 255, 0.05);
+
+  --cm-heading: #9cc7ff;
+  --cm-emphasis: #ff9fb8;
+  --cm-link: #6cb6ff;
+  --cm-code: #c9a2ff;
+  --cm-quote: #9fd3c3;
+  --cm-comment: #7f7f87;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 html,
 body {
+  height: 100%;
   margin: 0;
-  padding: 0;
-  background: #ffffff;
-}
-
-html[data-appearance="dark"],
-html[data-appearance="dark"] body {
-  background: #0d1117;
+  overflow: hidden;
 }
 
 body {
-  padding: 0;
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--editor-bg);
 }
 
-.markdown-body {
-  max-width: var(--md-export-width, 780px);
-  padding: 56px 48px 72px;
+#workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
 }
 
-@media print {
-  html,
-  body,
-  html[data-appearance="dark"] body {
-    background: #ffffff !important;
-  }
+/* 单栏模式下必须只保留一列：隐藏的网格项会被移出网格流，若仍保留
+   0 宽的三列模板，剩下的唯一面板会被自动放进第一列（0 宽）而被压没。 */
+#workspace.mode-source,
+#workspace.mode-preview {
+  grid-template-columns: minmax(0, 1fr);
+}
 
-  html[data-appearance="dark"] .markdown-body {
-    color: #1f2328 !important;
-  }
+.mode-source .pane-preview,
+.mode-source .split-divider,
+.mode-preview .pane-source,
+.mode-preview .split-divider {
+  display: none;
+}
 
-  .markdown-body {
-    max-width: none;
-    padding: 0;
-  }
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 
-  a {
-    color: inherit;
-    text-decoration: none;
-  }
+.pane-source {
+  background: transparent;
+}
 
-  pre,
-  blockquote,
-  table,
-  img,
-  figure {
-    break-inside: avoid;
-  }
+.pane-preview {
+  background: transparent;
+}
 
-  h1,
-  h2,
-  h3,
-  h4 {
-    break-after: avoid;
-  }
+.split-divider {
+  background: var(--pane-divider);
+  width: 1px;
+}
 
-  pre {
-    white-space: pre-wrap;
+.editor-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#source-placeholder {
+  position: absolute;
+  top: 114px;
+  left: 25px;
+  pointer-events: none;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: var(--editor-font-size);
+  color: var(--fg-faint);
+  transition: opacity 0.18s ease;
+  opacity: 1;
+}
+
+/* CodeMirror */
+.CodeMirror {
+  height: 100%;
+  background: transparent;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "PingFang SC", monospace;
+  font-size: var(--editor-font-size);
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+.CodeMirror-lines {
+  /* 顶部留白属于滚动内容：首行从原生悬浮控件下方开始，滚动时可进入控件后方。 */
+  padding: 112px 20px 140px;
+}
+
+.CodeMirror pre.CodeMirror-line,
+.CodeMirror pre.CodeMirror-line-like {
+  padding: 0 4px;
+}
+
+.CodeMirror-gutters {
+  display: none;
+}
+
+.CodeMirror-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.CodeMirror-selected {
+  background: var(--selection) !important;
+}
+
+.CodeMirror-focused .CodeMirror-selected {
+  background: var(--selection) !important;
+}
+
+.CodeMirror-activeline-background {
+  background: var(--active-line);
+}
+
+.CodeMirror-cursor {
+  border-left: 2px solid var(--accent);
+  border-right: none;
+}
+
+.CodeMirror-matchingbracket {
+  color: var(--accent) !important;
+  border-bottom: 1px solid var(--accent);
+}
+
+.cm-header,
+.cm-header-1,
+.cm-header-2,
+.cm-header-3,
+.cm-header-4,
+.cm-header-5,
+.cm-header-6 {
+  color: var(--cm-heading);
+  font-weight: 650;
+}
+
+.cm-formatting-header {
+  color: var(--cm-comment);
+  font-weight: 500;
+}
+
+.cm-em {
+  color: var(--cm-emphasis);
+  font-style: italic;
+}
+
+.cm-strong {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.cm-link {
+  color: var(--cm-link);
+}
+
+.cm-url,
+.cm-string {
+  color: var(--cm-quote);
+}
+
+.cm-quote {
+  color: var(--cm-quote);
+}
+
+.cm-comment {
+  color: var(--cm-comment);
+}
+
+.cm-inline-code,
+.cm-code {
+  color: var(--cm-code);
+}
+
+.cm-hr {
+  color: var(--fg-faint);
+}
+
+/* 预览滚动区 */
+.preview-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+}
+
+#preview {
+  padding-bottom: 120px;
+}
+
+#preview.is-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  font-size: var(--editor-font-size);
+  padding: 112px 20px 120px;
+  color: var(--fg-muted);
+}
+
+/* 顶部背景只模糊后方内容，文字和系统工具栏控件仍由原生层清晰绘制。
+   背景节点必须是 workspace 的兄弟节点，不能放进 article 或滚动容器。 */
+#chrome-backdrop {
+  position: fixed;
+  inset: 0 0 auto;
+  height: 64px;
+  z-index: 30;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.18);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+  /* 模糊采样层不叠加 mask，避免 WebKit 将采样树隔离。 */
+}
+
+#chrome-backdrop[hidden] {
+  display: none;
+}
+
+html[data-appearance="dark"] #chrome-backdrop {
+  background: rgba(27, 27, 30, 0.24);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  #chrome-backdrop {
+    background: var(--surface-top) !important;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
+}
+
+/* 查找替换浮条 */
+.find-bar {
+  position: fixed;
+  top: 74px;
+  right: 22px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--ui-surface-radius);
+  background: var(--surface-top);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+.find-bar[hidden] {
+  display: none;
+}
+
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.find-bar input {
+  width: 156px;
+  min-height: 26px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--ui-control-radius);
+  border: 1px solid var(--hairline);
+  background: var(--field-bg);
+  color: var(--fg);
+  outline: none;
+}
+
+.find-bar input:focus {
+  border-color: var(--accent);
+}
+
+.find-bar button {
+  min-width: 26px;
+  min-height: 26px;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--ui-control-radius);
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.find-bar button:hover {
+  background: var(--field-bg);
+  color: var(--fg);
+}
+
+.find-bar button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.find-bar button.is-on {
+  background: var(--accent);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+/* 查找命中高亮 */
+.cm-find-match {
+  background: rgba(255, 196, 0, 0.30);
+  border-radius: 2px;
+}
+
+.cm-find-current {
+  background: rgba(255, 140, 0, 0.55);
+  border-radius: 2px;
+}
+
+html[data-appearance="dark"] .cm-find-match {
+  background: rgba(255, 214, 102, 0.28);
+}
+
+html[data-appearance="dark"] .cm-find-current {
+  background: rgba(255, 159, 28, 0.6);
+}
+
+.find-count {
+  min-width: 34px;
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+#preview:empty::before {
+  content: "预览将在这里实时呈现";
+  display: block;
+  padding: 112px 38px 26px;
+  font-size: 13px;
+  color: var(--fg-faint);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 128, 0.28);
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 128, 0.45);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
