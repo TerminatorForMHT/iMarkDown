@@ -23,7 +23,14 @@ final class SidebarFileSelectionState: ObservableObject {
     @discardableResult
     func select(_ item: SidebarFileSelection?, in state: AppState) -> Task<Void, Never>? {
         guard pendingOpen == nil, !state.isDocumentOperationInProgress else { return nil }
-        guard let item else { value = nil; return nil }
+        guard let item else {
+            // 收起分组只隐藏选中行，保留身份以便再次展开，不重新打开文档。
+            if let current = value, current.url == state.session.url?.standardizedFileURL,
+               (current.location == .tree ? !state.settings.sidebarFileTreeExpanded
+                                         : !state.settings.sidebarRecentFilesExpanded) { return nil }
+            value = nil
+            return nil
+        }
         guard item != value else { return nil }
         let previous = value
         value = item
@@ -57,6 +64,7 @@ final class SidebarFileSelectionState: ObservableObject {
 @MainActor
 struct SidebarView: View {
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var settings: AppSettings
     @StateObject private var fileSelection: SidebarFileSelectionState
     @State private var collapsedHeadings: Set<Int> = []
 
@@ -76,7 +84,6 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .safeAreaInset(edge: .top) { brand }
         .safeAreaInset(edge: .bottom) {
             GlassActionPair(onNew: { _ = state.newDocument() }, onOpen: { _ = state.openDocument() })
                 .disabled(state.isDocumentOperationInProgress)
@@ -84,7 +91,6 @@ struct SidebarView: View {
                 .padding(.bottom, 12)
         }
         .background { SidebarGlassBackground().ignoresSafeArea() }
-        .navigationTitle("iMarkDown")
         .onAppear { fileSelection.synchronize(in: state) }
         .onChange(of: state.session.url) { _, _ in fileSelection.synchronize(in: state) }
         .onChange(of: state.recents.items) { _, _ in fileSelection.synchronize(in: state) }
@@ -97,7 +103,7 @@ struct SidebarView: View {
     }
 
     private var outlineSection: some View {
-        Section {
+        Section(isExpanded: $settings.sidebarOutlineExpanded) {
             if state.outline.isEmpty {
                 Text("当前文档暂无标题")
                     .font(.system(size: 11))
@@ -157,7 +163,7 @@ struct SidebarView: View {
     }
 
     private var recentSection: some View {
-        Section {
+        Section(isExpanded: $settings.sidebarRecentFilesExpanded) {
             if state.recents.items.isEmpty {
                 emptyHint.selectionDisabled()
             } else {
@@ -206,49 +212,6 @@ struct SidebarView: View {
                 .accessibilityLabel("管理最近文件")
             }
         }
-    }
-
-    private var brand: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.icon, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(hex: 0x64D2FF), Color(hex: 0x0A7CFF)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 28, height: 28)
-                .overlay(
-                    Image(systemName: "text.alignleft")
-                        .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(.white)
-                )
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("iMarkDown")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Liquid Glass")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 8)
-
-            // 外观、字号等偏好已统一收敛到「设置」，这里提供一个就近入口。
-            SettingsLink {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14, height: 14)
-            }
-            .glassIconControl()
-            .frame(width: DesignTokens.controlHeight, height: DesignTokens.controlHeight)
-            .help("设置")
-            .accessibilityLabel("设置")
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-        .padding(.bottom, 8)
     }
 
     private var emptyHint: some View {
@@ -310,6 +273,7 @@ private struct RecentRow: View {
 
 private struct FileTreeSection: View {
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var settings: AppSettings
     @ObservedObject var workspace: WorkspaceStore
 
     @State private var query = ""
@@ -320,7 +284,7 @@ private struct FileTreeSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Section {
+        Section(isExpanded: $settings.sidebarFileTreeExpanded) {
             if let root = workspace.rootURL {
                 searchField
                 if trimmedQuery.isEmpty {
@@ -521,11 +485,12 @@ private struct FileTreeSection: View {
 
 private struct FolderHistorySection: View {
     @EnvironmentObject private var state: AppState
+    @EnvironmentObject private var settings: AppSettings
     @ObservedObject var workspace: WorkspaceStore
 
     var body: some View {
         if workspace.rootURL == nil, !workspace.recentFolders.isEmpty {
-            Section {
+            Section(isExpanded: $settings.sidebarRecentFoldersExpanded) {
                 ForEach(workspace.recentFolders) { folder in
                     Button {
                         state.openFolder(at: folder.url)
@@ -842,7 +807,8 @@ enum SidebarSelectionChecks {
         await state.requestOpen(url: a).value
         await state.openFolder(at: root).value
         let selection = SidebarFileSelectionState()
-        let host = NSHostingView(rootView: SidebarView(fileSelection: selection).environmentObject(state))
+        let host = NSHostingView(rootView: SidebarView(fileSelection: selection)
+            .environmentObject(state).environmentObject(settings))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 740),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.title = "系统侧栏隔离验收"
@@ -860,6 +826,39 @@ enum SidebarSelectionChecks {
             return view.subviews.lazy.compactMap { findTable($0) }.first
         }
         guard let table = findTable(host) else { throw HeaderBackdropChecks.failure("侧栏没有系统 List 表格") }
+        let foldedRows = table.numberOfRows
+        let initialEpoch = state.editor.documentEpoch
+        try HeaderBackdropChecks.require(settings.sidebarOutlineExpanded && settings.sidebarFileTreeExpanded &&
+            !settings.sidebarRecentFilesExpanded && !settings.sidebarRecentFoldersExpanded,
+            "大纲和文件树默认展开，最近文件与最近文件夹默认收起")
+        settings.sidebarRecentFilesExpanded = true
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try HeaderBackdropChecks.require(table.numberOfRows == foldedRows + state.recents.items.count &&
+            table.selectedRow >= 0 && selection.value == SidebarFileSelection(.recent, a),
+            "展开历史后系统恢复当前文件选中行")
+        let expandedRows = table.numberOfRows
+        settings.sidebarRecentFilesExpanded = false
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try HeaderBackdropChecks.require(table.numberOfRows == foldedRows && state.session.url == a &&
+            state.editor.documentEpoch == initialEpoch && selection.value == SidebarFileSelection(.recent, a),
+            "收起最近文件只隐藏行，不切换文档或丢失选择身份")
+        settings.sidebarRecentFilesExpanded = true
+        settings.sidebarOutlineExpanded = false
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try HeaderBackdropChecks.require(table.numberOfRows == expandedRows - 1 && state.session.url == a,
+            "大纲分组可独立收起，不影响文件与文档")
+        settings.sidebarOutlineExpanded = true
+        state.workspace.closeFolder()
+        try await Task.sleep(nanoseconds: 250_000_000)
+        let collapsedFolderRows = table.numberOfRows
+        settings.sidebarRecentFoldersExpanded = true
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try HeaderBackdropChecks.require(table.numberOfRows == collapsedFolderRows + state.workspace.recentFolders.count &&
+            state.session.url == a && state.editor.documentEpoch == initialEpoch,
+            "最近文件夹独立展开，不自动打开或切换工作区")
+        settings.sidebarRecentFoldersExpanded = false
+        state.workspace.openFolder(root)
+        try await Task.sleep(nanoseconds: 250_000_000)
         try HeaderBackdropChecks.require(table.delegate != nil && table.selectedRow >= 0 &&
             table.selectedRowIndexes.count == 1 && selection.value == SidebarFileSelection(.recent, a),
             "系统 List 使用单行选择，并从当前文档恢复最近文件行")
@@ -933,8 +932,24 @@ enum SidebarSelectionChecks {
         try await Task.sleep(nanoseconds: 300_000_000)
         try HeaderBackdropChecks.require(state.session.url == a && selection.value == SidebarFileSelection(.tree, a),
             "嵌套文件与根目录文件之间的原生键盘导航可用")
+        let treeRows = table.numberOfRows
+        let directories = [root, nested]
+        let expandedDirectories = directories.map { state.workspace.isExpanded($0) }
+        let treeEpoch = state.editor.documentEpoch
+        settings.sidebarFileTreeExpanded = false
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try HeaderBackdropChecks.require(table.numberOfRows < treeRows && state.workspace.rootURL == root &&
+            directories.map { state.workspace.isExpanded($0) } == expandedDirectories && state.session.url == a &&
+            state.editor.documentEpoch == treeEpoch && selection.value == SidebarFileSelection(.tree, a),
+            "收起文件树保留工作区、目录展开状态与当前文档")
+        settings.sidebarFileTreeExpanded = true
+        try await Task.sleep(nanoseconds: 250_000_000)
+        try HeaderBackdropChecks.require(table.numberOfRows == treeRows && table.selectedRow >= 0 &&
+            selection.value == SidebarFileSelection(.tree, a) && state.editor.documentEpoch == treeEpoch,
+            "重新展开文件树恢复原生选中行，不重置编辑历史")
         state.outline = OutlineParser.parse("# 构建与运行\n\n## 运行测试")
         state.activeHeadingIndex = 0
+        print("SIDEBAR_SECTION_CHECK_PASSED：四组原生折叠、默认状态与文档保护通过")
         let originalAppearance = NSApp.appearance
         defer { NSApp.appearance = originalAppearance }
         for (name, appearanceName, scheme, increased) in [
