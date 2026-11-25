@@ -226,6 +226,9 @@ iMarkDown/
 
 # 开发迭代
 ./scripts/run.sh debug
+
+# 生成带 Finder 布局、背景图与自定义图标的 DMG
+./scripts/build-dmg.sh release
 ```
 
 不依赖 Xcode 工程；`swift build` 与打包脚本均可在只有 Command Line Tools 的环境完成。
