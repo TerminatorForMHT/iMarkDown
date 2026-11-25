@@ -23,6 +23,10 @@ struct MarkdownKitChecks {
         await runner.run("WorkspaceStore") {
             try await checkWorkspaceStore(runner)
         }
+        runner.run("AppSettings") {
+            try checkPreviewThemes(runner)
+            checkSidebarSections(runner)
+        }
         runner.finish()
     }
 
@@ -200,6 +204,68 @@ struct MarkdownKitChecks {
             store.recentFolders.contains { $0.path == directory.path },
             "旧文件夹保留在历史中"
         )
+    }
+
+    // MARK: - 预览主题
+
+    @MainActor
+    private static func checkPreviewThemes(_ runner: CheckRunner) throws {
+        let suite = "iMarkDownThemeChecks-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        runner.expect(settings.previewTheme == .github, "默认预览主题保持 GitHub")
+        runner.expect(PreviewTheme.allCases.map(\.rawValue) == ["github", "serif", "compact", "paper", "technical", "focus"],
+                      "原主题标识保留，新主题可枚举")
+        runner.expect(Set(PreviewTheme.allCases.map(\.title)).count == PreviewTheme.allCases.count, "主题名称互不重复")
+        settings.appearance = .dark
+        settings.editorFontSize = 17
+        settings.previewFontSize = 19.5
+        for theme in PreviewTheme.allCases {
+            let data = try JSONEncoder().encode(theme)
+            runner.expect(try JSONDecoder().decode(PreviewTheme.self, from: data) == theme, "\(theme.title)：编码可往返")
+            runner.expect(!theme.detail.isEmpty && PreviewTheme(rawValue: theme.rawValue) == theme, "\(theme.title)：标识与说明完整")
+            settings.previewTheme = theme
+            let restored = AppSettings(defaults: defaults)
+            runner.expect(restored.previewTheme == theme, "\(theme.title)：重建设置后恢复主题")
+            runner.expect(restored.appearance == .dark && restored.editorFontSize == 17 && restored.previewFontSize == 19.5,
+                          "\(theme.title)：切换主题不改变外观或字号")
+        }
+        defaults.set("unknown-theme", forKey: "settings.previewTheme")
+        runner.expect(AppSettings(defaults: defaults).previewTheme == .github, "未知主题安全回退 GitHub")
+    }
+
+    @MainActor
+    private static func checkSidebarSections(_ runner: CheckRunner) {
+        let suite = "iMarkDownSidebarSettingsChecks-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        runner.expect(settings.sidebarOutlineExpanded && settings.sidebarFileTreeExpanded,
+                      "大纲与文件树分组默认展开")
+        runner.expect(!settings.sidebarRecentFilesExpanded && !settings.sidebarRecentFoldersExpanded,
+                      "最近文件与最近文件夹默认收起")
+        settings.sidebarOutlineExpanded = false
+        runner.expect(settings.sidebarFileTreeExpanded && !settings.sidebarRecentFilesExpanded &&
+                      !settings.sidebarRecentFoldersExpanded, "大纲折叠不改变其他分组")
+        settings.sidebarFileTreeExpanded = false
+        settings.sidebarRecentFilesExpanded = true
+        settings.sidebarRecentFoldersExpanded = true
+        let restored = AppSettings(defaults: defaults)
+        runner.expect(!restored.sidebarOutlineExpanded && !restored.sidebarFileTreeExpanded &&
+                      restored.sidebarRecentFilesExpanded && restored.sidebarRecentFoldersExpanded,
+                      "重建设置后恢复四个分组的展开状态")
+        restored.sidebarOutlineExpanded = true
+        restored.sidebarFileTreeExpanded = true
+        restored.sidebarRecentFilesExpanded = false
+        restored.sidebarRecentFoldersExpanded = false
+        let reset = AppSettings(defaults: defaults)
+        runner.expect(reset.sidebarOutlineExpanded && reset.sidebarFileTreeExpanded &&
+                      !reset.sidebarRecentFilesExpanded && !reset.sidebarRecentFoldersExpanded,
+                      "再次切换的分组状态也能持久化")
+        runner.expect(reset.appearance == settings.appearance && reset.previewTheme == settings.previewTheme &&
+                      reset.editorFontSize == settings.editorFontSize && reset.previewFontSize == settings.previewFontSize,
+                      "分组折叠不影响外观、预览主题或字号")
     }
 
     // MARK: - 工具
