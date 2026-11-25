@@ -3,6 +3,9 @@ import MarkdownKit
 import UniformTypeIdentifiers
 import SwiftUI
 import WebKit
+#if IMARKDOWN_CHECKS || IMARKDOWN_UI_CHECK
+import PDFKit
+#endif
 
 enum WebResources {
     #if IMARKDOWN_CHECKS
@@ -116,7 +119,9 @@ struct MarkdownWebView: NSViewRepresentable {
                         }
                         let output = URL(fileURLWithPath: path, isDirectory: true)
                         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-                        if ProcessInfo.processInfo.environment["IMARKDOWN_DOCUMENT_CHECKS"] == "1" {
+                        if ProcessInfo.processInfo.environment["IMARKDOWN_THEME_CHECKS"] == "1" {
+                            try await PreviewThemeChecks.run(state: state, view: webView, directory: output)
+                        } else if ProcessInfo.processInfo.environment["IMARKDOWN_DOCUMENT_CHECKS"] == "1" {
                             try await DocumentTransitionChecks.run(state: state, directory: output)
                         } else {
                             if ProcessInfo.processInfo.environment["IMARKDOWN_SETTINGS_CHECKS"] == "1" {
@@ -211,6 +216,139 @@ struct MarkdownWebView: NSViewRepresentable {
 }
 
 #if IMARKDOWN_CHECKS || IMARKDOWN_UI_CHECK
+/// 两种隔离回归入口共用真实配置、Web 渲染与导出实现。
+@MainActor
+enum PreviewThemeChecks {
+    static func run(state: AppState, view: WKWebView, directory: URL) async throws {
+        let originalTheme = state.settings.previewTheme
+        let originalAppearance = state.settings.appearance
+        let originalSize = state.settings.previewFontSize
+        defer {
+            state.settings.previewTheme = originalTheme
+            state.settings.appearance = originalAppearance
+            state.settings.previewFontSize = originalSize
+        }
+        let markdown = "# Theme check · 主题回归\n\n正文 Mixed text 与 `code`。[链接](https://example.com)\n\n## 章节\n\n> 引用内容\n\n```swift\nlet value = 42\n```\n\n| 字段 | 内容 |\n| --- | --- |\n| name | 示例 |\n"
+        state.editor.setDocument(text: markdown, baseDirectory: nil)
+        _ = try await state.editor.currentText()
+        _ = try await view.evaluateJavaScript("window.MD.insert('可撤销输入\\n')")
+        let source = try await state.editor.currentText()
+        let epoch = state.editor.documentEpoch
+        guard let sourceStyle = try await view.evaluateJavaScript("JSON.stringify([getComputedStyle(document.querySelector('.CodeMirror')).fontFamily, getComputedStyle(document.querySelector('.CodeMirror')).fontSize])") as? String else {
+            throw HeaderBackdropChecks.failure("源码样式响应无效")
+        }
+        state.settings.previewFontSize = 19.5
+        let widths: [PreviewTheme: String] = [.github: "720px", .serif: "690px", .compact: "100%", .paper: "700px", .technical: "800px", .focus: "640px"]
+        let exportWidths: [PreviewTheme: String] = [.paper: "700px", .technical: "800px", .focus: "640px"]
+        let lineHeights: [PreviewTheme: Double] = [.github: 1.78, .serif: 1.92, .compact: 1.62, .paper: 1.9, .technical: 1.7, .focus: 1.95]
+        let exportView = WKWebView(frame: view.frame)
+        let exportWindow = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700),
+                                    styleMask: [.borderless], backing: .buffered, defer: false)
+        exportWindow.isReleasedWhenClosed = false
+        exportWindow.alphaValue = 0
+        exportWindow.ignoresMouseEvents = true
+        exportWindow.contentView = exportView
+        exportWindow.orderFrontRegardless()
+        defer { exportWindow.orderOut(nil); exportView.removeFromSuperview() }
+        for appearance in [AppearancePreference.light, .dark] {
+            state.settings.appearance = appearance
+            for theme in PreviewTheme.allCases {
+                state.settings.previewTheme = theme
+                let themeID = JS.encode(theme.rawValue)
+                let appearanceID = JS.encode(appearance.rawValue)
+                try await wait {
+                    (try? await bool(view, "document.documentElement.dataset.preview === \(themeID) && document.documentElement.dataset.appearance === \(appearanceID)")) == true
+                }
+                let layoutCheck = """
+                (() => {
+                  const style = getComputedStyle(document.querySelector('#preview'));
+                  return style.getPropertyValue('--md-width').trim() === \(JS.encode(widths[theme]!)) &&
+                    Math.abs(parseFloat(style.lineHeight) / parseFloat(style.fontSize) - \(lineHeights[theme]!)) < 0.01 &&
+                    parseFloat(style.fontSize) === 19.5 &&
+                    JSON.stringify([getComputedStyle(document.querySelector('.CodeMirror')).fontFamily,
+                      getComputedStyle(document.querySelector('.CodeMirror')).fontSize]) === \(JS.encode(sourceStyle));
+                })()
+                """
+                try HeaderBackdropChecks.require(try await bool(view, layoutCheck), "\(theme.title)/\(appearance.title)：版心与行距生效，保留预览字号及源码样式")
+                if theme == .paper {
+                    try HeaderBackdropChecks.require(try await bool(view, "getComputedStyle(document.querySelector('#preview')).fontFamily.includes('serif') && getComputedStyle(document.querySelector('#preview h1')).fontFamily.includes('sans-serif')"), "纸感：衬线正文与无衬线标题分层")
+                } else if theme == .technical {
+                    try HeaderBackdropChecks.require(try await bool(view, "getComputedStyle(document.querySelector('#preview pre')).borderRadius === '6px' && getComputedStyle(document.querySelector('#preview td')).paddingTop === '6px'"), "技术文档：代码与表格使用独立密度")
+                } else if theme == .focus {
+                    try HeaderBackdropChecks.require(try await bool(view, "getComputedStyle(document.querySelector('#preview h1')).borderBottomWidth === '0px' && getComputedStyle(document.querySelector('#preview a')).textDecorationLine.includes('underline')"), "专注阅读：去掉标题分隔，链接仍可辨识")
+                }
+                // 原有主题保持配色兼容；新增风格要求包含链接在内的正文对比度达到 4.5。
+                if exportWidths[theme] != nil {
+                    try HeaderBackdropChecks.require(try await bool(view, contrastCheck), "\(theme.title)/\(appearance.title)：正文、标题、链接及行内代码对比度达标")
+                }
+                try HeaderBackdropChecks.require(try await state.editor.currentText() == source && state.editor.documentEpoch == epoch,
+                                                "\(theme.title)/\(appearance.title)：切换风格不改源码或文档代数")
+                let html = HTMLComposer.compose(articleHTML: try await state.editor.articleHTML(), title: "主题回归",
+                                                dark: appearance == .dark, previewTheme: theme, documentURL: nil)
+                exportView.loadHTMLString(html, baseURL: nil)
+                try await wait {
+                    guard !exportView.isLoading else { return false }
+                    return (try? await bool(exportView, "document.documentElement.dataset.preview === \(themeID) && document.documentElement.dataset.appearance === \(appearanceID) && !!document.querySelector('article table')")) == true
+                }
+                let exportWidth = exportWidths[theme] ?? "780px"
+                try HeaderBackdropChecks.require(try await bool(exportView, "getComputedStyle(document.querySelector('article')).maxWidth === \(JS.encode(exportWidth)) && document.querySelector('article').textContent.includes('Theme check') && !document.querySelector('script, link[rel=stylesheet]')"),
+                                                "\(theme.title)/\(appearance.title)：独立 HTML 复用主题且不依赖外部样式")
+                if exportWidths[theme] != nil {
+                    try HeaderBackdropChecks.require(try await bool(exportView, contrastCheck), "\(theme.title)/\(appearance.title)：HTML 导出文字对比度达标")
+                }
+                if appearance == .light && exportWidths[theme] != nil {
+                    let paragraphs = String(repeating: "<p>主题分页检查 Mixed text，文档内容可正常阅读。</p>", count: 40)
+                    let pdfHTML = HTMLComposer.compose(articleHTML: (try await state.editor.articleHTML()) + paragraphs,
+                                                      title: "主题回归", dark: false, previewTheme: theme, documentURL: nil, layout: .pdf)
+                    let destination = directory.appendingPathComponent("theme-\(theme.rawValue).pdf")
+                    try await PDFExportService.export(html: pdfHTML, baseURL: nil, to: destination)
+                    guard let document = PDFDocument(url: destination) else { throw HeaderBackdropChecks.failure("主题 PDF 无法读取") }
+                    try HeaderBackdropChecks.require(document.pageCount >= 2 && document.string?.contains("Theme check") == true,
+                                                    "\(theme.title)：PDF 保留文本并正常分页")
+                    for index in 0..<document.pageCount {
+                        guard let page = document.page(at: index) else { throw HeaderBackdropChecks.failure("主题 PDF 页面缺失") }
+                        let size = page.bounds(for: .mediaBox).size
+                        try HeaderBackdropChecks.require(abs(size.width - 595.2) < 1 && abs(size.height - 841.8) < 1,
+                                                        "\(theme.title)：PDF 第 \(index + 1) 页为 A4")
+                    }
+                }
+            }
+        }
+        _ = try await view.evaluateJavaScript("window.MD.undo()")
+        try HeaderBackdropChecks.require(try await state.editor.currentText() == markdown, "多次切换主题后编辑撤销历史仍完整")
+        print("PREVIEW_THEME_CHECKS_PASSED：六套风格深浅色渲染、HTML 与新增主题 PDF 导出通过")
+    }
+
+    private static func wait(_ condition: () async -> Bool) async throws {
+        for _ in 0..<300 {
+            if await condition() { return }
+            try await Task.sleep(nanoseconds: 30_000_000)
+        }
+        throw HeaderBackdropChecks.failure("等待主题渲染超时")
+    }
+
+    private static func bool(_ view: WKWebView, _ script: String) async throws -> Bool {
+        try await view.evaluateJavaScript(script) as? Bool ?? false
+    }
+
+    // 以实际背景和半透明行内代码底色计算对比度，不依赖截图采样。
+    private static let contrastCheck = """
+    (() => {
+      const rgb = value => (value.match(/[\\d.]+/g) || []).map(Number);
+      const blend = (front, back) => front.slice(0, 3).map((v, i) => v * (front[3] ?? 1) + back[i] * (1 - (front[3] ?? 1)));
+      const lum = color => color.map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))
+        .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const contrast = (front, back) => (Math.max(lum(front), lum(back)) + 0.05) / (Math.min(lum(front), lum(back)) + 0.05);
+      const background = rgb(getComputedStyle(document.body).backgroundColor).slice(0, 3);
+      return ['.markdown-body p', '.markdown-body h1', '.markdown-body a', '.markdown-body p code'].every(selector => {
+        const style = getComputedStyle(document.querySelector(selector));
+        const back = blend(rgb(style.backgroundColor), background);
+        return contrast(blend(rgb(style.color), back), back) >= 4.5;
+      });
+    })()
+    """
+}
+
 /// 使用应用自身的渲染快照比较模糊前后像素，不读取桌面或其他窗口。
 @MainActor
 enum HeaderBackdropChecks {
